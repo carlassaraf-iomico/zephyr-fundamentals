@@ -1,0 +1,124 @@
+# Automatic feedback for homework tasks.
+#
+# Runs when a task tag (or a branch with the same name) is pushed, e.g.
+#   git tag l3-task1 && git push origin l3-task1
+# and only the job for that task runs. Results show in the run's summary page
+# and as annotations on the files that need changes.
+#
+# This is feedback only: the course's own review is what counts.
+
+name: Homework checks
+
+on:
+  push:
+    tags: ['l*-task*']
+    branches: ['l*-task*']
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to check, e.g. l3-task1 (defaults to the selected ref name)'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homework-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  l3-task1:
+    if: startsWith(inputs.task || github.ref_name, 'l3-task1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Use the Kconfig parser from the same Zephyr revision the student builds with.
+      - name: Fetch kconfiglib from Zephyr
+        run: |
+          rev=$(sed -n 's/^ *revision: *//p' west.yml | head -n1)
+          mkdir -p "$RUNNER_TEMP/kconfig"
+          curl -sSfL -o "$RUNNER_TEMP/kconfig/kconfiglib.py" \
+            "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/${rev:-main}/scripts/kconfig/kconfiglib.py"
+          echo "PYTHONPATH=$RUNNER_TEMP/kconfig" >> "$GITHUB_ENV"
+
+      - name: Check the LED Subsystem Kconfig menu
+        run: python3 .github/scripts/check_l3_task1.py --json result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: l3-task1-result
+          path: result.json
+          if-no-files-found: ignore
+
+  l8-task1:
+    if: startsWith(inputs.task || github.ref_name, 'l8-task1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ws
+    env:
+      # native_sim builds with the runner's gcc; no Zephyr SDK download needed.
+      ZEPHYR_TOOLCHAIN_VARIANT: host
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/zephyr-course
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler gcc-multilib g++-multilib ninja-build
+
+      - name: Cache Zephyr
+        uses: actions/cache@v4
+        with:
+          path: ws/deps
+          key: zephyr-${{ hashFiles('ws/zephyr-course/west.yml') }}
+
+      # Only Zephyr itself: native_sim needs none of the vendor HALs in west.yml.
+      - name: Fetch Zephyr
+        run: |
+          pip install west
+          west init -l zephyr-course
+          west update --narrow -o=--depth=1 zephyr
+          echo "ZEPHYR_BASE=$PWD/deps/zephyr" >> "$GITHUB_ENV"
+
+      - name: Install Zephyr Python requirements
+        run: |
+          pip install \
+            -r deps/zephyr/scripts/requirements-base.txt \
+            -r deps/zephyr/scripts/requirements-build-test.txt \
+            -r deps/zephyr/scripts/requirements-run-test.txt
+
+      - name: Run the ring_buf tests
+        continue-on-error: true  # the next step turns the results into feedback
+        run: west twister -T zephyr-course/tests/ring_buf -p native_sim --outdir twister-out --inline-logs
+
+      - name: Check the tests
+        run: >
+          python3 zephyr-course/.github/scripts/check_l8_task1.py
+          --root zephyr-course
+          --twister-json twister-out/twister.json
+          --platform native_sim
+          --json result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: l8-task1-result
+          path: |
+            ws/result.json
+            ws/twister-out/twister.json
+          if-no-files-found: ignore
