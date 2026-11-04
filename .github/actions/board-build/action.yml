@@ -1,0 +1,108 @@
+name: Build for the student's board
+description: >
+  Read the board from board.txt (native_sim when there is none), fetch the HALs
+  and the SDK toolchain that board needs, and build the app. Never fails the job:
+  it writes <workspace>/board.json, and the checker turns that and the build
+  folder into feedback (board.py check_build). Run zephyr-setup first.
+
+inputs:
+  app:
+    description: app folder inside the course repo, e.g. app
+    required: true
+  workspace:
+    description: west workspace folder that holds the course repo as zephyr-course/
+    default: ws
+  build-dir:
+    description: build folder, relative to the workspace
+    default: build
+
+outputs:
+  board:
+    description: board the app was built for
+    value: ${{ steps.resolve.outputs.board }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read board.txt
+      id: resolve
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: >
+        python3 zephyr-course/.github/scripts/board.py resolve
+        --root zephyr-course --json board.json --github-output "$GITHUB_OUTPUT"
+
+    # Only the HALs this board needs (e.g. hal_stm32 + cmsis_6), cached per west.yml and board family.
+    - name: Cache modules
+      if: steps.resolve.outputs.projects != ''
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.workspace }}/deps/modules
+        key: zephyr-modules-${{ hashFiles(format('{0}/zephyr-course/west.yml', inputs.workspace)) }}-${{ steps.resolve.outputs.projects-key }}
+
+    - name: Fetch modules
+      if: steps.resolve.outputs.projects != ''
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PROJECTS: ${{ steps.resolve.outputs.projects }}
+        BLOBS: ${{ steps.resolve.outputs.blobs }}
+      run: |
+        projects=() blobs=()
+        [ "$PROJECTS" = all ] || read -ra projects <<< "$PROJECTS"
+        read -ra blobs <<< "$BLOBS"
+        ok=true
+        west update --narrow -o=--depth=1 "${projects[@]}" || ok=false
+        if $ok && [ ${#blobs[@]} -gt 0 ]; then
+          west blobs fetch "${blobs[@]}" || ok=false
+        fi
+        $ok || python3 zephyr-course/.github/scripts/board.py mark board.json setup=failed
+
+    - name: Cache toolchain
+      if: steps.resolve.outputs.toolchain != '' && steps.resolve.outputs.toolchain != 'host'
+      id: sdk-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/zephyr-sdk-${{ steps.resolve.outputs.sdk-version }}
+        key: zephyr-sdk-${{ steps.resolve.outputs.sdk-version }}-${{ steps.resolve.outputs.toolchain }}
+
+    - name: Install toolchain
+      if: steps.resolve.outputs.toolchain != '' && steps.resolve.outputs.toolchain != 'host' && steps.sdk-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        TOOLCHAIN: ${{ steps.resolve.outputs.toolchain }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! west sdk install --install-base "$HOME" --no-hosttools --toolchains "$TOOLCHAIN" \
+             --personal-access-token "$GH_TOKEN"; then
+          python3 zephyr-course/.github/scripts/board.py mark board.json setup=failed
+        fi
+
+    - name: Build
+      if: steps.resolve.outputs.build == 'true'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        BOARD: ${{ steps.resolve.outputs.board }}
+        TOOLCHAIN: ${{ steps.resolve.outputs.toolchain }}
+        SDK_VERSION: ${{ steps.resolve.outputs.sdk-version }}
+        BOARD_ROOT_DIR: ${{ steps.resolve.outputs.board-root }}
+        APP_DIR: ${{ inputs.app }}
+        BUILD_DIR: ${{ inputs.build-dir }}
+      run: |
+        if grep -q '"setup": "failed"' board.json; then
+          echo "::warning::Skipping the build: CI could not set up $BOARD."
+          exit 0
+        fi
+        if [ "$TOOLCHAIN" = host ]; then
+          export ZEPHYR_TOOLCHAIN_VARIANT=host
+        else
+          export ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR="$HOME/zephyr-sdk-$SDK_VERSION"
+        fi
+        extra=()
+        # A board defined in the repo itself (the L5 custom board).
+        [ -z "$BOARD_ROOT_DIR" ] || extra=(-- "-DBOARD_ROOT=$PWD/zephyr-course")
+        # A failed build is feedback, not a CI error: the checker quotes the log's first error.
+        west build -p -b "$BOARD" -d "$BUILD_DIR" "zephyr-course/$APP_DIR" "${extra[@]}" 2>&1 | tee build.log || true
+        python3 zephyr-course/.github/scripts/board.py mark board.json build_log=build.log

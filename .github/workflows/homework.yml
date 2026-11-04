@@ -57,6 +57,54 @@ jobs:
           path: result.json
           if-no-files-found: ignore
 
+  l4-task1:
+    if: startsWith(inputs.task || github.ref_name, 'l4-task1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ws
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/zephyr-course
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
+
+      # Normally app/; a separate app folder with the heartbeat work is accepted too.
+      - name: Find the app folder
+        id: app
+        run: echo "dir=$(python3 zephyr-course/.github/scripts/check_l4_task1.py --root zephyr-course --print-app)" >> "$GITHUB_OUTPUT"
+
+      # Builds for the board in board.txt (native_sim when there is none) and writes board.json.
+      - uses: ./ws/zephyr-course/.github/actions/board-build
+        with:
+          app: ${{ steps.app.outputs.dir }}
+
+      - name: Check the heartbeat LED
+        env:
+          APP_DIR: ${{ steps.app.outputs.dir }}
+        run: >
+          python3 zephyr-course/.github/scripts/check_l4_task1.py
+          --root zephyr-course --app "$APP_DIR"
+          --build-dir build --board-info board.json
+          --json result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: l4-task1-result
+          path: |
+            ws/result.json
+            ws/board.json
+            ws/build/zephyr/zephyr.dts
+            ws/build/zephyr/.config
+          if-no-files-found: ignore
+
   # l8-task1 (tests pass) and l8-task2 (coverage) share the build; task 2 adds coverage.
   l8:
     if: startsWith(inputs.task || github.ref_name, 'l8-task1') || startsWith(inputs.task || github.ref_name, 'l8-task2')
@@ -78,31 +126,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install host build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends device-tree-compiler gcc-multilib g++-multilib ninja-build
-
-      - name: Cache Zephyr
-        uses: actions/cache@v4
+      - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
         with:
-          path: ws/deps
-          key: zephyr-${{ hashFiles('ws/zephyr-course/west.yml') }}
-
-      # Only Zephyr itself: native_sim needs none of the vendor HALs in west.yml.
-      - name: Fetch Zephyr
-        run: |
-          pip install west
-          west init -l zephyr-course
-          west update --narrow -o=--depth=1 zephyr
-          echo "ZEPHYR_BASE=$PWD/deps/zephyr" >> "$GITHUB_ENV"
-
-      - name: Install Zephyr Python requirements
-        run: |
-          pip install \
-            -r deps/zephyr/scripts/requirements-base.txt \
-            -r deps/zephyr/scripts/requirements-build-test.txt \
-            -r deps/zephyr/scripts/requirements-run-test.txt
+          requirements: base build-test run-test
 
       - name: Run the ring_buf tests
         continue-on-error: true  # the next step turns the results into feedback

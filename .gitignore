@@ -4,3 +4,5 @@ build
 # West files
 .west
 deps
+
+.github/scripts/__pycache__

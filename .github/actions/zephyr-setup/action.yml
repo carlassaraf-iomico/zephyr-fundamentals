@@ -1,0 +1,50 @@
+name: Zephyr setup for native_sim
+description: >
+  Fetch Zephyr (no vendor HALs) and the host tools to build and test on native_sim.
+  Expects the course repo checked out at <workspace>/zephyr-course. Sets ZEPHYR_BASE,
+  and PYTHONPATH so the checkers can import kconfiglib.
+
+inputs:
+  workspace:
+    description: west workspace folder that holds the course repo as zephyr-course/
+    default: ws
+  requirements:
+    description: Zephyr requirement sets to install, space separated (scripts/requirements-<name>.txt)
+    default: base
+
+runs:
+  using: composite
+  steps:
+    - name: Install host build tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends device-tree-compiler gcc-multilib g++-multilib ninja-build
+
+    # deps/zephyr only: board-build caches the HALs under deps/modules separately.
+    - name: Cache Zephyr
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.workspace }}/deps/zephyr
+        key: zephyr-src-${{ hashFiles(format('{0}/zephyr-course/west.yml', inputs.workspace)) }}
+
+    # Only Zephyr itself: native_sim needs none of the vendor HALs; board-build fetches the ones a board needs.
+    - name: Fetch Zephyr
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: |
+        pip install west
+        west init -l zephyr-course
+        west update --narrow -o=--depth=1 zephyr
+        echo "ZEPHYR_BASE=$PWD/deps/zephyr" >> "$GITHUB_ENV"
+        echo "PYTHONPATH=$PWD/deps/zephyr/scripts/kconfig" >> "$GITHUB_ENV"
+
+    - name: Install Zephyr Python requirements
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        REQUIREMENTS: ${{ inputs.requirements }}
+      run: |
+        args=()
+        for r in $REQUIREMENTS; do args+=(-r "deps/zephyr/scripts/requirements-$r.txt"); done
+        pip install "${args[@]}"
