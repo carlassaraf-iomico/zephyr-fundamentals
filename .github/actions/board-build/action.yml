@@ -52,11 +52,21 @@ runs:
         [ "$PROJECTS" = all ] || read -ra projects <<< "$PROJECTS"
         read -ra blobs <<< "$BLOBS"
         ok=true
-        west update --narrow -o=--depth=1 "${projects[@]}" || ok=false
+        # The HALs come in through zephyr's `import:`, and west only updates imported projects with a
+        # plain `west update`; so mark everything else inactive and update what is left.
+        if [ ${#projects[@]} -gt 0 ]; then
+          filter="-.*,+zephyr"
+          for p in "${projects[@]}"; do filter+=",+$p"; done
+          west config manifest.project-filter -- "$filter"
+        fi
+        west update --narrow -o=--depth=1 || ok=false
         if $ok && [ ${#blobs[@]} -gt 0 ]; then
           west blobs fetch "${blobs[@]}" || ok=false
         fi
-        $ok || python3 zephyr-course/.github/scripts/board.py mark board.json setup=failed
+        if ! $ok; then
+          echo "::warning::Could not fetch the modules for this board (${PROJECTS}); the build is skipped."
+          python3 zephyr-course/.github/scripts/board.py mark board.json setup=failed
+        fi
 
     - name: Cache toolchain
       if: steps.resolve.outputs.toolchain != '' && steps.resolve.outputs.toolchain != 'host'
@@ -76,6 +86,7 @@ runs:
       run: |
         if ! west sdk install --install-base "$HOME" --no-hosttools --toolchains "$TOOLCHAIN" \
              --personal-access-token "$GH_TOKEN"; then
+          echo "::warning::Could not install the $TOOLCHAIN toolchain; the build is skipped."
           python3 zephyr-course/.github/scripts/board.py mark board.json setup=failed
         fi
 
