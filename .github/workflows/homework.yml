@@ -27,6 +27,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  l2-task1:
+    if: startsWith(inputs.task || github.ref_name, 'l2-task1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ws
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/zephyr-course
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # A Zephyr tree or a whole west workspace can't be set up; the check step explains why.
+      - name: Check the repository layout
+        id: layout
+        run: echo "ok=$(python3 zephyr-course/.github/scripts/check_l2_task1.py --root zephyr-course --layout-only)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
+        if: steps.layout.outputs.ok == 'true'
+
+      # Builds app/ for the board in board.txt and writes board.json.
+      - uses: ./ws/zephyr-course/.github/actions/board-build
+        if: steps.layout.outputs.ok == 'true'
+        with:
+          app: app
+
+      - name: Check blinky and board.txt
+        run: |
+          args=()
+          [ "${{ steps.layout.outputs.ok }}" != true ] || args=(--build-dir build --board-info board.json)
+          python3 zephyr-course/.github/scripts/check_l2_task1.py --root zephyr-course "${args[@]}" --json result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: l2-task1-result
+          path: |
+            ws/result.json
+            ws/board.json
+            ws/build.log
+          if-no-files-found: ignore
+
   l3-task1:
     if: startsWith(inputs.task || github.ref_name, 'l3-task1')
     runs-on: ubuntu-24.04
@@ -101,6 +147,7 @@ jobs:
           path: |
             ws/result.json
             ws/board.json
+            ws/build.log
             ws/build/zephyr/zephyr.dts
             ws/build/zephyr/.config
           if-no-files-found: ignore

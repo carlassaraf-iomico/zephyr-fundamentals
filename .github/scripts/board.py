@@ -189,6 +189,7 @@ def resolve(root, workspace=None):
     if p:
         info["problems"].append(p)
     if rel is None:
+        info["missing"] = True
         info["problems"].append(problem(
             f"No `{BOARD_FILE}` at the repository root, so CI built for `{NATIVE}`. Add one with your "
             f"board's name (for example `{EXAMPLE}`) so CI builds for the board you use.", kind="note"))
@@ -328,10 +329,36 @@ def first_error(log_path, root):
     return None, None, None
 
 
-def check_build(report, info, build_dir, app):
-    """Record the board and build checks. True when the build output exists and can be checked."""
+DT_MISSING_RE = re.compile(r"DT_N_(ALIAS|NODELABEL)_(\w+?)_(?:P_|EXISTS|ORD|FULL_NAME)")
+
+
+def devicetree_hint(log_path, board):
+    """A plain-words reason for the cryptic `__device_dts_ord_DT_N_ALIAS_led0_...` build errors."""
+    try:
+        text = open(log_path, errors="replace").read()
+    except OSError:
+        return None
+    m = DT_MISSING_RE.search(text) if "error" in text else None
+    if not m:
+        return None
+    kind, name = m.groups()
+    if kind == "ALIAS":
+        return (f"`{board}`'s devicetree has no `{name}` alias, which `DT_ALIAS({name})` needs: add it in an "
+                f"overlay, or declare a board that has it.")
+    return f"`{board}`'s devicetree has no node labelled `{name}`, which `DT_NODELABEL({name})` needs."
+
+
+def check_build(report, info, build_dir, app, require_file=False):
+    """Record the board and build checks. True when the build output exists and can be checked.
+    require_file: board.txt is a deliverable of this task (L2), so a missing one fails."""
     board = info["board"]
+    if require_file and info.get("missing"):
+        report.check(False, f"`{BOARD_FILE}` declares your board",
+                     fix=f"Add `{BOARD_FILE}` at the repository root with your board's name, for example "
+                         f"`{EXAMPLE}`, or `{NATIVE}` if you have no board. CI builds every task for it.")
     for p in info.get("problems", []):
+        if require_file and info.get("missing"):
+            continue
         if p["kind"] == "note":
             report.note(p["message"])
         else:
@@ -346,9 +373,11 @@ def check_build(report, info, build_dir, app):
     built = any(os.path.isfile(os.path.join(zdir, n)) for n in ("zephyr.elf", "zephyr.exe"))
     if not built:
         if info.get("declared"):
-            err, path, line = (first_error(info["build_log"], info.get("root") or "zephyr-course")
-                               if info.get("build_log") else (None, None, None))
-            detail = f" The first error is `{err}`." if err else " The build step of this run shows the error."
+            log = info.get("build_log")
+            err, path, line = first_error(log, info.get("root") or "zephyr-course") if log else (None, None, None)
+            hint = devicetree_hint(log, board) if log else None
+            detail = (f" {hint}" if hint else f" The first error is `{err}`." if err
+                      else " The build step of this run shows the error.")
             report.check(False, f"the app builds for `{board}`",
                          fix=f"Make the app build for `{board}`: `west build -b {board} {app}` fails.{detail}",
                          path=path, line=line)
