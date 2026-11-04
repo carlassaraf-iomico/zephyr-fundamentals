@@ -7,8 +7,9 @@ Requirements (tasks.md, Lecture 2):
      workspace around it).
   2. Build the LED blink app for the student's board, declared in `board.txt`
      (one line, e.g. `nucleo_f401re`; `native_sim` without hardware).
-  3-4. Flash it and see the LED toggle every second. CI can't flash; it checks
-     that the code still toggles an LED and waits 1000 ms between toggles.
+  3-4. Flash it and see the LED toggle every second. CI can't flash; it notes
+     when the code toggles no LED (fine for boards without one) or waits
+     something other than 1000 ms. Neither fails the task.
 
 Layers:
   - Layout (always, no Zephyr needed; --layout-only prints true/false so the
@@ -25,14 +26,14 @@ Usage:
 Exit code 0 when approved, 1 otherwise.
 """
 import argparse
+import glob
 import os
 import re
 import sys
 
 from homework_report import Report
 from check_l8_task1 import strip_comments
-from check_l4_task1 import call_args, line_of, read
-import board as board_info
+import board as board_info  # imports Zephyr's scripts only when resolving, so layout checks run without Zephyr
 
 UPSTREAM = "iomico-public/zephyr-course"
 PERIOD_MS = 1000
@@ -40,7 +41,8 @@ SRC_EXT = (".c", ".cpp", ".cc")
 TOGGLE_CALLS = ("gpio_pin_toggle_dt", "gpio_pin_toggle", "gpio_pin_set_dt", "gpio_pin_set",
                 "gpio_pin_set_raw", "gpio_port_toggle_bits", "gpio_port_set_bits", "gpio_port_clear_bits",
                 "gpio_port_set_bits_raw", "gpio_port_clear_bits_raw", "led_on", "led_off", "led_on_dt",
-                "led_off_dt", "led_set_brightness", "led_set_brightness_dt")
+                "led_off_dt", "led_set_brightness", "led_set_brightness_dt",
+                "led_strip_update_rgb", "led_strip_update_channels")  # RGB LEDs on many ESP32 boards
 # call -> (index of the argument with the delay, unit of a bare number in it)
 DELAY_ARGS = {
     "k_msleep": (0, "ms"), "k_usleep": (0, "us"), "k_busy_wait": (0, "us"), "k_sleep": (0, "timeout"),
@@ -59,6 +61,25 @@ CAST_RE = re.compile(r"\(\s*(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:u?int(?:8|
 ARITH_RE = re.compile(r"^[\d\s.+\-*/()]+$")
 
 
+def read(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def line_of(text, pos):
+    return text.count("\n", 0, pos) + 1
+
+
+def call_args(code, name):
+    """(argument text, offset) for every call of `name(...)` in code."""
+    for m in re.finditer(r"\b%s\s*\(" % re.escape(name), code):
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"(": 1, ")": -1}.get(code[i], 0)
+            i += 1
+        yield code[m.end():i - 1], m.start()
+
+
 # ---------------------------------------------------------------- layout
 def check_layout(report, root):
     """True when the repo is the zephyr-course fork with app/ at its root."""
@@ -74,6 +95,14 @@ def check_layout(report, root):
               and os.path.isfile(os.path.join(root, d, "app", "CMakeLists.txt"))]
     workspace = ".west" in entries or os.path.isdir(os.path.join(root, "deps", "zephyr")) or nested
     if not os.path.isfile(app_cmake):
+        moved = find_zephyr_app(root)
+        if moved and not workspace:
+            where = "the repository root" if moved == "." else f"`{moved}/`"
+            fix = (f"Move the app from {where} to `app/`, as the fork ships it: CI and the later tasks build "
+                   "`app/`.")
+            report.check(False, "`app/CMakeLists.txt` is at the repository root",
+                         fix=fix, path=os.path.join(moved, "CMakeLists.txt") if moved != "." else "CMakeLists.txt")
+            return False
         if workspace:
             fix = ("Push `l2-task1` from your zephyr-course repository itself, not the west workspace around "
                    "it, so `app/` is at the repository root.")
@@ -90,6 +119,18 @@ def check_layout(report, root):
     return report.check(os.path.isfile(os.path.join(root, "west.yml")), "`west.yml` is at the repository root",
                         fix=f"Restore `west.yml` at the repository root from `{UPSTREAM}`: west uses it to fetch "
                             "Zephyr for this repo.", path="west.yml")
+
+
+def find_zephyr_app(root):
+    """A Zephyr app (CMakeLists.txt with find_package(Zephyr)) at the root or one or two levels down."""
+    for pattern in ("CMakeLists.txt", "*/CMakeLists.txt", "app/*/CMakeLists.txt"):
+        for path in sorted(glob.glob(os.path.join(root, pattern))):
+            rel = os.path.relpath(os.path.dirname(path), root)
+            if rel.split(os.sep)[0] in ("tests", "deps", "modules", "zephyr", "samples"):
+                continue
+            if "find_package(Zephyr" in read(path).replace(" ", ""):
+                return rel
+    return None
 
 
 # ---------------------------------------------------------------- period
@@ -160,8 +201,12 @@ def check_sources(report, root, build_dir):
 
     toggles = [(f, name) for f, code in codes.items() for name in TOGGLE_CALLS
                if re.search(r"\b%s\s*\(" % name, code)]
-    report.check(toggles, "the code toggles an LED", path=rel[main],
-                 fix="Toggle the LED in the main loop, for example with `gpio_pin_toggle_dt(&led)`.")
+    if not toggles:
+        # The task asks for a blinking LED only "if there's an LED on your board".
+        report.note("The code doesn't toggle an LED (`gpio_pin_toggle_dt()` or similar). That's fine if your "
+                    "board has no LED; otherwise toggle it in the main loop.")
+        return
+    report.check(True, "the code toggles an LED")
 
     defs = dict(CONSTANTS)
     for code in codes.values():
@@ -177,9 +222,10 @@ def check_sources(report, root, build_dir):
                 if name == "k_timer_start" and ms == 0 and len(parts) > 1:
                     ms = to_ms(parts[1], unit, defs)  # one-shot timer: the duration
                 delays.append((f, line_of(code, pos), f"{name}({' '.join(args.split())})", ms))
+    # The period is a note, not a failure (decided Nov 4): L2 is about the fork, the board and the build.
     if not delays:
-        report.check(False, f"the LED waits {PERIOD_MS} ms between toggles", path=rel[main],
-                     fix=f"Wait one second between LED toggles, for example with `k_msleep({PERIOD_MS})`.")
+        report.note(f"The code doesn't wait between LED toggles; the task asks for one toggle per second, "
+                    f"for example with `k_msleep({PERIOD_MS})` in `{rel[main]}`.")
         return
     known = [d for d in delays if d[3] is not None]
     if any(abs(d[3] - PERIOD_MS) < 0.5 for d in known) or (
@@ -187,8 +233,8 @@ def check_sources(report, root, build_dir):
         report.check(True, f"the LED waits {PERIOD_MS} ms between toggles")
     elif known and len(known) == len(delays):
         f, line, call, ms = known[0]
-        report.check(False, f"the LED waits {PERIOD_MS} ms between toggles", path=rel[f], line=line,
-                     fix=f"Toggle the LED every second: `{call}` waits {ms:g} ms; make it {PERIOD_MS} ms.")
+        report.note(f"The task asks for one toggle per second: `{call}` in `{rel[f]}` line {line} waits "
+                    f"{ms:g} ms.")
     else:
         report.note("CI couldn't work out how long the LED waits between toggles; a teacher will check that "
                     "it's one second.")
