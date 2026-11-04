@@ -57,8 +57,9 @@ jobs:
           path: result.json
           if-no-files-found: ignore
 
-  l8-task1:
-    if: startsWith(inputs.task || github.ref_name, 'l8-task1')
+  # l8-task1 (tests pass) and l8-task2 (coverage) share the build; task 2 adds coverage.
+  l8:
+    if: startsWith(inputs.task || github.ref_name, 'l8-task1') || startsWith(inputs.task || github.ref_name, 'l8-task2')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -67,6 +68,7 @@ jobs:
     env:
       # native_sim builds with the runner's gcc; no Zephyr SDK download needed.
       ZEPHYR_TOOLCHAIN_VARIANT: host
+      TASK: ${{ startsWith(inputs.task || github.ref_name, 'l8-task2') && 'l8-task2' || 'l8-task1' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,21 +106,30 @@ jobs:
 
       - name: Run the ring_buf tests
         continue-on-error: true  # the next step turns the results into feedback
-        run: west twister -T zephyr-course/tests/ring_buf -p native_sim --outdir twister-out --inline-logs
+        run: |
+          coverage=()
+          if [ "$TASK" = l8-task2 ]; then
+            coverage=(--coverage --coverage-tool gcovr --coverage-basedir zephyr-course/app/modules/ring_buf)
+          fi
+          west twister -T zephyr-course/tests/ring_buf -p native_sim --outdir twister-out --inline-logs "${coverage[@]}"
 
       - name: Check the tests
-        run: >
-          python3 zephyr-course/.github/scripts/check_l8_task1.py
-          --root zephyr-course
-          --twister-json twister-out/twister.json
-          --platform native_sim
-          --json result.json
+        run: |
+          if [ "$TASK" = l8-task2 ]; then
+            python3 zephyr-course/.github/scripts/check_l8_task2.py --root zephyr-course \
+              --twister-out twister-out --platform native_sim --json result.json
+          else
+            python3 zephyr-course/.github/scripts/check_l8_task1.py --root zephyr-course \
+              --twister-json twister-out/twister.json --platform native_sim --json result.json
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: l8-task1-result
+          name: ${{ env.TASK }}-result
           path: |
             ws/result.json
             ws/twister-out/twister.json
+            ws/twister-out/coverage_summary.json
+            ws/twister-out/coverage/
           if-no-files-found: ignore
