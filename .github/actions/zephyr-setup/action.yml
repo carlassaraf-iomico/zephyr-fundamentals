@@ -36,6 +36,8 @@ runs:
         pip install west
         west init -l zephyr-course
         west update --narrow -o=--depth=1 zephyr
+        # The course app calls find_package(Zephyr) without HINTS, so register Zephyr with CMake.
+        west zephyr-export
         echo "ZEPHYR_BASE=$PWD/deps/zephyr" >> "$GITHUB_ENV"
         echo "PYTHONPATH=$PWD/deps/zephyr/scripts/kconfig" >> "$GITHUB_ENV"
 

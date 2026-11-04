@@ -301,8 +301,8 @@ def info_for(board, declared):
 ERROR_RES = (  # most specific first
     re.compile(r"devicetree error: .*"),
     re.compile(r"(?P<path>[^\s:]+\.(?:c|h|cpp|dts|dtsi|overlay|conf)):(?P<line>\d+):(?:\d+:)? (?:fatal )?error: .*"),
-    re.compile(r"(?:error|ERROR): .*"),
     re.compile(r"CMake Error.*"),
+    re.compile(r"(?:error|ERROR): (?!command exited with status).*"),  # not west's "cmake failed" summary
 )
 
 
@@ -316,11 +316,20 @@ def first_error(log_path, root):
     except OSError:
         return None, None, None
     for rx in ERROR_RES:
-        for l in lines:
+        for i, l in enumerate(lines):
             m = rx.search(l)
             if not m:
                 continue
             msg = prefix.sub("", m.group(0))
+            if msg.startswith("CMake Error"):
+                # CMake puts the reason on the following lines, up to the first blank line.
+                more = []
+                for nxt in lines[i + 1:]:
+                    if not nxt:
+                        break
+                    more.append(nxt)
+                msg = (msg + " " + " ".join(more)).strip()
+                msg = prefix.sub("", msg)
             path = line = None
             if "path" in rx.groupindex:
                 path = prefix.sub("", m.group("path"))
