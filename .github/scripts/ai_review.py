@@ -31,8 +31,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 RUBRIC_DIR = HERE.parent / "rubric"
 
-# Tasks with rules only the AI can judge (see each rubric's "AI checks").
-AI_TASKS = {"l4-task1", "l5-task2", "l6-task1", "l6-task2", "l7-task1", "l7-task2"}
+# Tasks with rules only the AI can judge (see each rubric's "AI checks"). L6 and L7 are fully
+# scripted (check_l6_l7.py); the rules it can't decide go to a teacher.
+AI_TASKS = {"l4-task1", "l5-task2"}
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_EFFORT = "medium"
@@ -40,26 +41,18 @@ MAX_CHANGES = 5
 
 # Files worth showing for each task. A file is shown when it matches and the PR
 # changed it, or when it is listed in ALWAYS (the files the task edits upstream).
-_DRIVER = ["*drivers/*", "*dts/bindings/*", "*include/*", "*src/*", "*.overlay", "*Kconfig*",
-           "*CMakeLists.txt", "*zephyr/module.yml", "*prj.conf", "board.txt", "*.dts", "*.dtsi",
-           "*.yaml"]
 PATTERNS = {
     "l4-task1": ["board.txt", "*.overlay", "*Kconfig*", "*prj.conf", "*CMakeLists.txt", "*src/*"],
     # The board's code and config; its devicetree doesn't matter for "printed before main".
     "l5-task2": ["*boards/*.c", "*boards/*.cpp", "*boards/*.h", "*boards/*Kconfig*",
                  "*boards/*_defconfig", "*boards/*CMakeLists.txt", "*boards/*board.yml",
                  "zephyr/module.yml", "app/CMakeLists.txt"],
-    "l6-task1": _DRIVER,
-    "l6-task2": _DRIVER,
-    "l7-task1": _DRIVER,
-    "l7-task2": _DRIVER,
 }
 APP_FILES = ["board.txt", "app/CMakeLists.txt", "app/Kconfig", "app/prj.conf", "app/app.overlay",
              "app/src/main.c", "app/src/main.cpp"]
-ALWAYS = {"l4-task1": APP_FILES, "l5-task2": [], "l6-task1": APP_FILES, "l6-task2": APP_FILES,
-          "l7-task1": APP_FILES, "l7-task2": APP_FILES}
-SKIP_DIRS = ("deps/", "build/", "twister-out/", ".west/", ".github/", ".git/", "app/modules/",
-             "tests/")
+ALWAYS = {"l4-task1": APP_FILES, "l5-task2": []}
+SKIP_DIRS = ("deps/", "build/", "twister-out/", ".west/", ".github/", ".git/", "app/modules/calculator/",
+             "app/modules/ring_buf/", "tests/")
 TEXT_EXT = {".c", ".h", ".cpp", ".hpp", ".cc", ".dts", ".dtsi", ".overlay", ".yaml", ".yml",
             ".conf", ".txt", ".cmake"}
 MAX_FILE_CHARS = 40_000

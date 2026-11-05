@@ -5,13 +5,20 @@ Add a custom extension API function to the l6-task1 driver and call it from `mai
 function changes a parameter of the student's choice in the driver's dynamic data struct.
 
 ## Automatic checks
-None yet: the AI judges every rule below.
-
-## AI checks
-- The function is declared in a header the app includes (for example
-  `include/drivers/sensor/<name>.h` or next to the driver) and defined in the driver.
-- The app calls it, from `app/src/main.c` or `main.cpp`, with the driver's device.
+`.github/scripts/check_l6_l7.py --task l6-task2`.
+- The driver offers a function besides the sensor API that takes the device: a plain function,
+  a `__syscall` (`z_impl_...`), a header wrapper calling `api->member(dev, ...)`, or a member of
+  an extended API struct.
+- The app calls it.
+- It is declared in a header the app includes, not in the app's source.
 - It changes a field of the driver's data struct through the device (`dev->data`), not a global
-  or static variable. A syscall-style wrapper (`__syscall` plus `z_impl_...`) or a plain function
-  are both fine.
-- The rest of the l6-task1 driver still works: the sensor API struct is unchanged in spirit.
+  or static variable.
+- The driver still has a sensor API struct. (l6-task1 judges `.sample_fetch` / `.channel_get`.)
+- The app builds for the board in `board.txt`, and the driver is compiled into it.
+
+## Decided by a teacher
+- What the function changes, when the script can't follow it (it calls further functions, or
+  writes through a pointer it got elsewhere).
+
+## Not checked
+- The parameter's effect on the hardware.

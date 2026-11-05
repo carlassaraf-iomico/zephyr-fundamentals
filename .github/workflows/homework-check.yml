@@ -298,22 +298,56 @@ jobs:
             ws/twister-out/coverage/
           if-no-files-found: ignore
 
-  # L6 and L7 have no script checks yet; the AI review covers their whole rubric.
-  not-checked:
+  # l6-task1/2 (sensor driver, extension API) and l7-task1/2 (shell commands): build the app for
+  # the board in board.txt, then check the driver and shell code and what the build compiled.
+  l6-l7:
     needs: task
     if: startsWith(needs.task.outputs.task, 'l6-') || startsWith(needs.task.outputs.task, 'l7-')
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ws
     env:
       TASK: ${{ needs.task.outputs.task }}
     steps:
-      - name: Write an empty result
-        run: |
-          printf '{"task": "%s", "title": "", "status": "not_checked", "ref": "%s", "changes": [], "checks": [], "notes": [], "error": null}\n' \
-            "$TASK" "$HOMEWORK_REF" > result.json
-          printf '## %s\n\nNo automatic checks for this task yet.\n' "$TASK" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        with:
+          path: ws/zephyr-course
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
+
+      # Normally app/; another app folder with the task's work is accepted too.
+      - name: Find the app folder
+        id: app
+        run: echo "dir=$(python3 zephyr-course/.github/scripts/check_l6_l7.py --task "$TASK" --root zephyr-course --print-app)" >> "$GITHUB_OUTPUT"
+
+      # Builds for the board in board.txt (native_sim when there is none) and writes board.json.
+      - uses: ./ws/zephyr-course/.github/actions/board-build
+        with:
+          app: ${{ steps.app.outputs.dir }}
+
+      - name: Check the driver and shell code
+        env:
+          APP_DIR: ${{ steps.app.outputs.dir }}
+        run: >
+          python3 zephyr-course/.github/scripts/check_l6_l7.py --task "$TASK"
+          --root zephyr-course --app "$APP_DIR"
+          --build-dir build --board-info board.json
+          --json result.json
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: homework-result
-          path: result.json
+          path: |
+            ws/result.json
+            ws/board.json
+            ws/build.log
+            ws/build/zephyr/zephyr.dts
+            ws/build/zephyr/.config
+          if-no-files-found: ignore
