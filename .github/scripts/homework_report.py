@@ -7,7 +7,8 @@ entry of the course feedback file (feedback/students/<nickname>.json):
 
     {"task": "l3-task1", "status": "approved" | "changes_needed" | "error",
      "ref": "<tag or branch>", "changes": [{"message", "path", "line"}],
-     "checks": [...], "notes": [...]}
+     "title": "...", "checks": [{"ok", "label", "message", "path", "line"}],
+     "notes": [...], "error": null | {"message", "path", "line"}}
 
 "error" means the checker could not evaluate the submission (for example the
 Kconfig does not parse); a teacher should look at it.
@@ -62,6 +63,21 @@ class Report:
             out.append(item)
         return out
 
+    def result(self):
+        """The result JSON (one task entry of the feedback file, plus the check list)."""
+        return {
+            "task": self.task,
+            "title": self.title,
+            "status": self.status,
+            # PR runs set HOMEWORK_REF to the PR's branch; GITHUB_REF_NAME would be "12/merge".
+            "ref": os.environ.get("HOMEWORK_REF") or os.environ.get("GITHUB_REF_NAME"),
+            "changes": self.changes(),
+            "checks": [{"ok": c["ok"], "label": c["label"], "message": c["message"],
+                        "path": c["path"], "line": c["line"]} for c in self.checks],
+            "notes": self.notes,
+            "error": self.error,
+        }
+
     def finish(self, json_path=None):
         status = self.status
         passed = sum(c["ok"] for c in self.checks)
@@ -84,16 +100,8 @@ class Report:
             self._summary(status, passed)
 
         if json_path:
-            result = {
-                "task": self.task,
-                "status": status,
-                "ref": os.environ.get("GITHUB_REF_NAME"),
-                "changes": self.changes(),
-                "checks": [{"ok": c["ok"], "label": c["label"]} for c in self.checks],
-                "notes": self.notes,
-            }
             with open(json_path, "w") as f:
-                json.dump(result, f, indent=2)
+                json.dump(self.result(), f, indent=2)
                 f.write("\n")
 
         return 0 if status == "approved" else 1
@@ -112,28 +120,46 @@ class Report:
         path = os.environ.get("GITHUB_STEP_SUMMARY")
         if not path:
             return
-        icon = {"approved": "✅", "changes_needed": "❌", "error": "⚠️"}[status]
-        lines = [f"## {icon} {self.task}: {self.title}", "",
-                 f"**{status.replace('_', ' ')}** ({passed}/{len(self.checks)} checks passed)", ""]
-        if self.error:
-            lines += [f"> {self.error['message']}", ""]
-        failed = [c for c in self.checks if not c["ok"]]
-        if failed:
-            lines += ["| What to change | Where |", "| --- | --- |"]
-            for c in failed:
-                where = ""
-                if c.get("path"):
-                    where = f"`{c['path']}" + (f":{c['line']}" if c.get("line") else "") + "`"
-                lines.append(f"| {_cell(c['message'])} | {where} |")
-            lines.append("")
-        if self.notes:
-            lines += ["**Notes**", ""] + [f"- {n}" for n in self.notes] + [""]
-        if self.checks:
-            lines += [f"<details><summary>All {len(self.checks)} checks</summary>", ""]
-            lines += [f"- {'✅' if c['ok'] else '❌'} {c['label']}" for c in self.checks]
-            lines += ["", "</details>", ""]
         with open(path, "a") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write(render_markdown(self.result(), heading=2) + "\n")
+
+
+STATUS_ICON = {"approved": "✅", "changes_needed": "❌", "error": "⚠️", "not_checked": "➖"}
+
+
+def render_markdown(result, heading=3):
+    """The checklist as Markdown, from a result dict. Used by the run summary and the PR review."""
+    status = result.get("status", "error")
+    checks = result.get("checks") or []
+    passed = sum(1 for c in checks if c.get("ok"))
+    title = result.get("title") or result.get("task", "")
+    lines = [f"{'#' * heading} {STATUS_ICON.get(status, '⚠️')} {result.get('task', '')}: {title}", ""]
+    if status == "not_checked":
+        lines += ["No automatic checks for this task yet.", ""]
+    else:
+        lines += [f"**{status.replace('_', ' ')}** ({passed}/{len(checks)} checks passed)", ""]
+    if result.get("error"):
+        lines += [f"> {_cell(result['error']['message'])}", ""]
+    failed = [c for c in checks if not c.get("ok")]
+    if failed:
+        lines += ["| What to change | Where |", "| --- | --- |"]
+        for c in failed:
+            lines.append(f"| {_cell(c.get('message') or c.get('label', ''))} | {_where(c)} |")
+        lines.append("")
+    notes = result.get("notes") or []
+    if notes:
+        lines += ["**Notes**", ""] + [f"- {n}" for n in notes] + [""]
+    if checks:
+        lines += [f"<details><summary>All {len(checks)} checks</summary>", ""]
+        lines += [f"- {'✅' if c.get('ok') else '❌'} {c.get('label', '')}" for c in checks]
+        lines += ["", "</details>", ""]
+    return "\n".join(lines)
+
+
+def _where(c):
+    if not c.get("path"):
+        return ""
+    return f"`{c['path']}" + (f":{c['line']}" if c.get("line") else "") + "`"
 
 
 def _cell(text):

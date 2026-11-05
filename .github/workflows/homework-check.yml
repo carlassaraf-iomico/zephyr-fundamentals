@@ -1,15 +1,20 @@
-# Automatic feedback for homework tasks.
+# Automatic checks for homework tasks.
 #
-# Runs when a task tag (or a branch with the same name) is pushed, e.g.
+# Runs on a pull request from a task branch (the submission flow, see HOMEWORK.md),
+# and on a push of a task tag or branch in a student's fork, e.g.
 #   git tag l3-task1 && git push origin l3-task1
-# and only the job for that task runs. Results show in the run's summary page
-# and as annotations on the files that need changes.
+# Only the job for that task runs. Results show in the run's summary page and as
+# annotations on the files that need changes. On a pull request, the
+# "Homework review" workflow then posts them on the PR, with the AI review.
 #
-# This is feedback only: the course's own review is what counts.
+# This job builds and runs the student's code, so it must never get secrets: it
+# runs with a read-only token, and pull_request runs from forks get no secrets.
 
 name: Homework checks
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   push:
     tags: ['l*-task*']
     branches: ['l*-task*']
@@ -26,9 +31,39 @@ concurrency:
   group: homework-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The task branch, also on pull requests (where GITHUB_REF_NAME is "<n>/merge").
+  HOMEWORK_REF: ${{ github.head_ref || inputs.task || github.ref_name }}
+
 jobs:
+  # Works out the task from the branch or tag name: l4-task1, l4-task1-fix, ...
+  task:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      task: ${{ steps.task.outputs.task }}
+    steps:
+      - name: Pick the task from the branch name
+        id: task
+        run: |
+          task=""
+          if [[ "$HOMEWORK_REF" =~ ^(l[2-8]-task[12])($|[^0-9]) ]]; then
+            case "${BASH_REMATCH[1]}" in
+              l2-task1|l3-task1|l4-task1|l5-task1|l5-task2|l6-task1|l6-task2|l7-task1|l7-task2|l8-task1|l8-task2)
+                task=${BASH_REMATCH[1]} ;;
+            esac
+          fi
+          echo "task=$task" >> "$GITHUB_OUTPUT"
+          if [ -z "$task" ]; then
+            echo "::warning::\`$HOMEWORK_REF\` is not a task name. Name the branch after the task, e.g. \`l4-task1\`."
+            printf '## No task\n\n`%s` is not a task name. Name the branch after the task, e.g. `l4-task1`.\n' "$HOMEWORK_REF" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Task: $task"
+          fi
+
   l2-task1:
-    if: startsWith(inputs.task || github.ref_name, 'l2-task1')
+    needs: task
+    if: needs.task.outputs.task == 'l2-task1'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -66,7 +101,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: l2-task1-result
+          name: homework-result
           path: |
             ws/result.json
             ws/board.json
@@ -74,7 +109,8 @@ jobs:
           if-no-files-found: ignore
 
   l3-task1:
-    if: startsWith(inputs.task || github.ref_name, 'l3-task1')
+    needs: task
+    if: needs.task.outputs.task == 'l3-task1'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -99,12 +135,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: l3-task1-result
+          name: homework-result
           path: result.json
           if-no-files-found: ignore
 
   l4-task1:
-    if: startsWith(inputs.task || github.ref_name, 'l4-task1')
+    needs: task
+    if: needs.task.outputs.task == 'l4-task1'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -143,7 +180,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: l4-task1-result
+          name: homework-result
           path: |
             ws/result.json
             ws/board.json
@@ -154,14 +191,15 @@ jobs:
 
   # l5-task1 (copy/rename) and l5-task2 (from scratch): build Zephyr's hello_world for the custom board.
   l5:
-    if: startsWith(inputs.task || github.ref_name, 'l5-task1') || startsWith(inputs.task || github.ref_name, 'l5-task2')
+    needs: task
+    if: startsWith(needs.task.outputs.task, 'l5-')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
         working-directory: ws
     env:
-      TASK: ${{ startsWith(inputs.task || github.ref_name, 'l5-task2') && 'l5-task2' || 'l5-task1' }}
+      TASK: ${{ needs.task.outputs.task }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,7 +235,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ env.TASK }}-result
+          name: homework-result
           path: |
             ws/result.json
             ws/board.json
@@ -206,7 +244,8 @@ jobs:
 
   # l8-task1 (tests pass) and l8-task2 (coverage) share the build; task 2 adds coverage.
   l8:
-    if: startsWith(inputs.task || github.ref_name, 'l8-task1') || startsWith(inputs.task || github.ref_name, 'l8-task2')
+    needs: task
+    if: startsWith(needs.task.outputs.task, 'l8-')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -215,7 +254,7 @@ jobs:
     env:
       # native_sim builds with the runner's gcc; no Zephyr SDK download needed.
       ZEPHYR_TOOLCHAIN_VARIANT: host
-      TASK: ${{ startsWith(inputs.task || github.ref_name, 'l8-task2') && 'l8-task2' || 'l8-task1' }}
+      TASK: ${{ needs.task.outputs.task }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -251,10 +290,30 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ env.TASK }}-result
+          name: homework-result
           path: |
             ws/result.json
             ws/twister-out/twister.json
             ws/twister-out/coverage_summary.json
             ws/twister-out/coverage/
           if-no-files-found: ignore
+
+  # L6 and L7 have no script checks yet; the AI review covers their whole rubric.
+  not-checked:
+    needs: task
+    if: startsWith(needs.task.outputs.task, 'l6-') || startsWith(needs.task.outputs.task, 'l7-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      TASK: ${{ needs.task.outputs.task }}
+    steps:
+      - name: Write an empty result
+        run: |
+          printf '{"task": "%s", "title": "", "status": "not_checked", "ref": "%s", "changes": [], "checks": [], "notes": [], "error": null}\n' \
+            "$TASK" "$HOMEWORK_REF" > result.json
+          printf '## %s\n\nNo automatic checks for this task yet.\n' "$TASK" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homework-result
+          path: result.json
