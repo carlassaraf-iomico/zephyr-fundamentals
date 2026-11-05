@@ -300,7 +300,7 @@ def resolve_target(info, root, workspace, target, rel, board_roots):
     if not toolchain:
         info["problems"].append(problem(
             f"CI can't tell which toolchain `{target}` needs, so it didn't build the app. "
-            "A teacher will build it by hand.", kind="note"))
+            "An instructor will build it by hand.", kind="note"))
         info["buildable"] = False
         return info
     if toolchain == "host":
@@ -438,7 +438,7 @@ def check_build(report, info, build_dir, app, require_file=False, what="the app"
         return False
     if info.get("setup") != "ok":
         report.note(f"CI could not install the toolchain or modules for `{board}`, so the build was not "
-                    "checked. This is a CI problem, not yours; a teacher will rerun it.")
+                    "checked. This is a CI problem, not yours; an instructor will rerun it.")
         return False
     zdir = os.path.join(build_dir, "zephyr")
     built = any(os.path.isfile(os.path.join(zdir, n)) for n in ("zephyr.elf", "zephyr.exe"))

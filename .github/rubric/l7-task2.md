@@ -18,7 +18,7 @@ validates its argument and prints an error with `shell_error` when it is missing
 - The app builds for the board in `board.txt`, and the driver and the shell code are compiled
   into it.
 
-## Decided by a teacher
+## Decided by an instructor
 - A handler with no range check of its own that relies on the driver returning an error.
 
 ## Not checked

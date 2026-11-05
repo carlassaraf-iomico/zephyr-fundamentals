@@ -26,8 +26,8 @@ the source that sets `.sample_fetch` / `.channel_get`.
 - The app builds for the board in `board.txt`, the driver's `.c` file is compiled into it, and the
   built devicetree has the driver's node.
 
-## Decided by a teacher
-When the script can't tell from the code, the review says a teacher will check it:
+## Decided by an instructor
+When the script can't tell from the code, the review says an instructor will check it:
 - An LED level the script can't follow (a value from another function, a level that depends on a
   condition, a write to a register).
 

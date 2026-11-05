@@ -236,7 +236,7 @@ def check_sources(report, root, build_dir):
         report.note(f"The task asks for one toggle per second: `{call}` in `{rel[f]}` line {line} waits "
                     f"{ms:g} ms.")
     else:
-        report.note("CI couldn't work out how long the LED waits between toggles; a teacher will check that "
+        report.note("CI couldn't work out how long the LED waits between toggles; an instructor will check that "
                     "it's one second.")
 
 
@@ -275,7 +275,7 @@ def main():
             board_info.check_build(report, board_info.load_info(args.board_info), args.build_dir or "build",
                                    "app", require_file=True)
         elif args.board_info:
-            report.note("CI did not get to build the app; a teacher will check the build.")
+            report.note("CI did not get to build the app; an instructor will check the build.")
     return report.finish(args.json)
 
 

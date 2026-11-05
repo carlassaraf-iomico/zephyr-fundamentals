@@ -16,7 +16,7 @@ function changes a parameter of the student's choice in the driver's dynamic dat
 - The driver still has a sensor API struct. (l6-task1 judges `.sample_fetch` / `.channel_get`.)
 - The app builds for the board in `board.txt`, and the driver is compiled into it.
 
-## Decided by a teacher
+## Decided by an instructor
 - What the function changes, when the script can't follow it (it calls further functions, or
   writes through a pointer it got elsewhere).
 

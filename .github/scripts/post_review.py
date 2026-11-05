@@ -41,7 +41,7 @@ RANK = {"approved": 0, "changes_needed": 1, "under_review": 2}
 LABELS = {
     "approved": ("approved", "0e8a16", "Homework approved by the checks"),
     "changes_needed": ("changes-needed", "d93f0b", "Homework needs changes"),
-    "under_review": ("needs-teacher", "fbca04", "A teacher reviews this by hand"),
+    "under_review": ("needs-instructor", "fbca04", "An instructor reviews this by hand"),
 }
 TASK_LABEL_COLOR = "1d76db"
 BOT_LOGINS = {"github-actions[bot]"}
@@ -162,38 +162,38 @@ def decide(task, result, result_problem, touches_github, ai_call):
     """Returns (status, summary, changes, reason, ai_ran). `ai_call()` runs the AI review."""
     if touches_github:
         return ("under_review", "This pull request changes files in `.github/`, so its checks "
-                "can't be trusted. A teacher will review it.", [],
+                "can't be trusted. An instructor will review it.", [],
                 "The PR changes `.github/`.", False)
     if result is None:
-        return ("under_review", f"{result_problem} A teacher will look at it.", [],
+        return ("under_review", f"{result_problem} An instructor will look at it.", [],
                 result_problem, False)
     status = result["status"]
     if status == "error":
         msg = (result.get("error") or {}).get("message", "The checks could not evaluate this commit.")
-        return ("under_review", "The checks could not evaluate this commit. A teacher will look at it.",
+        return ("under_review", "The checks could not evaluate this commit. An instructor will look at it.",
                 [], msg, False)
     if status == "changes_needed":
         return ("changes_needed", "The automatic checks found something to change.",
                 result.get("changes") or [], "", False)
-    if status == "under_review":  # the scripts passed what they could decide; the rest is the teacher's
+    if status == "under_review":  # the scripts passed what they could decide; the rest is the instructor's
         unsure = [c.get("label", "") for c in result.get("checks") or [] if c.get("ok") is None]
-        return ("under_review", "The automatic checks passed everything they can decide. A teacher will check "
+        return ("under_review", "The automatic checks passed everything they can decide. An instructor will check "
                 "the rest; you don't need to do anything.", [],
                 "Not decided by the checks: " + "; ".join(unsure) + ".", False)
     if task not in ai_review.AI_TASKS:
         if status == "approved":
             return ("approved", "All automatic checks passed.", [], "", False)
-        return ("under_review", "This task has no automatic checks yet. A teacher will review it.",
+        return ("under_review", "This task has no automatic checks yet. An instructor will review it.",
                 [], "No checks and no AI rules for this task.", False)
 
     ai = ai_call()
     if ai is None:
         return None  # daily limit: the caller explains
-    if ai["status"] == "off":  # AI review switched off: the teacher's batch review covers these rules
+    if ai["status"] == "off":  # AI review switched off: the instructor's batch review covers these rules
         if status == "approved":
-            return ("under_review", "All automatic checks passed. A teacher will check the rest of "
+            return ("under_review", "All automatic checks passed. An instructor will check the rest of "
                     "this task; you don't need to do anything.", [], "", False)
-        return ("under_review", "This task has no automatic checks yet. A teacher will review it; "
+        return ("under_review", "This task has no automatic checks yet. An instructor will review it; "
                 "you don't need to do anything.", [], "", False)
     if ai["status"] == "approved":
         return ("approved", "All automatic checks passed, and the code meets the task's other rules.",
@@ -203,7 +203,7 @@ def decide(task, result, result_problem, touches_github, ai_call):
                 else "The code")
         return ("changes_needed", f"{lead} doesn't meet all of the task's rules yet.",
                 ai["changes"], ai.get("reason", ""), True)
-    return ("under_review", "A teacher will review this task.", [], ai.get("reason", ""), True)
+    return ("under_review", "An instructor will review this task.", [], ai.get("reason", ""), True)
 
 
 # ---------------------------------------------------------------- output
@@ -211,7 +211,7 @@ def decide(task, result, result_problem, touches_github, ai_call):
 HEADINGS = {
     "approved": "✅ {task} approved",
     "changes_needed": "❌ {task}: changes needed",
-    "under_review": "👀 {task}: a teacher will review this",
+    "under_review": "👀 {task}: an instructor will review this",
     "limited": "⏸️ {task}: review paused",
 }
 
@@ -239,7 +239,7 @@ def compose(task, sha, status, summary, changes, reason, ai_ran, result, reviewe
         checks = result.get("checks") or []
         passed = sum(1 for c in checks if c.get("ok") is True)
         unsure = sum(1 for c in checks if c.get("ok") is None)
-        label = (f"Automatic checks ({passed}/{len(checks)} passed" + (f", {unsure} for a teacher)" if unsure else ")")
+        label = (f"Automatic checks ({passed}/{len(checks)} passed" + (f", {unsure} for an instructor)" if unsure else ")")
                  if checks else "Automatic checks")
         lines += [f"<details><summary>{label}</summary>", "",
                   render_markdown(result, heading=4), "</details>", ""]
@@ -383,7 +383,7 @@ def main():
             ai_out.update(ai_review.review(task, result, files, skipped,
                                            os.environ.get("REVIEW_MODEL") or None,
                                            os.environ.get("REVIEW_EFFORT") or None))
-        except Exception as e:  # API down, rate limit, ...: a teacher looks instead
+        except Exception as e:  # API down, rate limit, ...: an instructor looks instead
             log(f"AI review failed: {e!r}")
             ai_out.update(status="under_review", reason=f"The AI review failed ({type(e).__name__}).")
         return ai_out
@@ -400,8 +400,8 @@ def main():
     if ai_out.get("usage"):
         log(f"AI review: {ai_out.get('model')} {ai_out['usage']} status={ai_out.get('status')} "
             f"reason={ai_out.get('reason')!r}")
-    # Routine teacher reviews (the AI is off, or a rule the scripts can't decide) only get the
-    # `needs-teacher` label; a mention is for real problems (.github changes, broken checks).
+    # Routine instructor reviews (the AI is off, or a rule the scripts can't decide) only get the
+    # `needs-instructor` label; a mention is for real problems (.github changes, broken checks).
     routine = not touches_github and result is not None and (
         ai_out.get("status") == "off" or result.get("status") == "under_review")
     mention = None if routine else reviewer

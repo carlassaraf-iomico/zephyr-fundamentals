@@ -18,7 +18,7 @@ Layers:
     code are compiled into it (compile_commands.json), and the devicetree has the driver's node.
 
 Some rules can't be settled by reading the code (an LED level that comes from a variable, a
-range the driver checks instead of the shell). Those are recorded as "for a teacher": they never
+range the driver checks instead of the shell). Those are recorded as "for an instructor": they never
 fail the task, and the result is `under_review` when nothing else failed.
 
 Usage:

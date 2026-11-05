@@ -12,4 +12,4 @@ See HOMEWORK.md for the whole flow.
 - [ ] I built it for my board, and ran it on the board when I have one.
 - [ ] I didn't change anything in `.github/`.
 
-<!-- Optional: anything a teacher should know, e.g. "my board has no LED, so the overlay adds one". -->
+<!-- Optional: anything an instructor should know, e.g. "my board has no LED, so the overlay adds one". -->

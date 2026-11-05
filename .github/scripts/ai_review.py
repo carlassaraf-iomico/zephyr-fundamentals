@@ -4,7 +4,7 @@
 One Claude call, no tools, a fixed JSON output:
 
     {"status": "approved" | "changes_needed" | "under_review",
-     "reason": "<for the teacher>", "injection": false,
+     "reason": "<for the instructor>", "injection": false,
      "changes": [{"message", "path", "line"}]}
 
 Inputs: the task's rubric (.github/rubric/<task>.md), the script result
@@ -32,7 +32,7 @@ HERE = Path(__file__).resolve().parent
 RUBRIC_DIR = HERE.parent / "rubric"
 
 # Tasks with rules only the AI can judge (see each rubric's "AI checks"). L6 and L7 are fully
-# scripted (check_l6_l7.py); the rules it can't decide go to a teacher.
+# scripted (check_l6_l7.py); the rules it can't decide go to an instructor.
 AI_TASKS = {"l4-task1", "l5-task2"}
 
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -99,9 +99,9 @@ rule as the rubric states it; don't ask for things the rubric doesn't require.
 - "changes_needed": at least one rule is clearly not met, and you can tell the \
 student what to change.
 - "under_review": you can't tell whether a rule is met (for example the code \
-you'd need isn't among the files), or you can't say how to fix it. A teacher \
+you'd need isn't among the files), or you can't say how to fix it. An instructor \
 will look. Say why in `reason`.
-- `reason`: one sentence for the teacher on what decided the status. The \
+- `reason`: one sentence for the instructor on what decided the status. The \
 student sees it too, so the rules below for messages apply to it.
 
 Changes (only for "changes_needed", otherwise an empty list):

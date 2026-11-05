@@ -7,10 +7,10 @@
 #   the API, and never builds or runs them,
 # - the AI call has no tools, and its output is cleaned before it is posted.
 #
-# Repository setup (see HOMEWORK.md, "For teachers"):
+# Repository setup (see HOMEWORK.md, "For instructors"):
 # - environment `ai-review` with secret ANTHROPIC_API_KEY, deployable from main only;
 # - variable AI_REVIEW=on to run the AI review (default off: tasks with AI rules
-#   pass the scripts, then wait for a teacher with the `needs-teacher` label);
+#   pass the scripts, then wait for an instructor with the `needs-instructor` label);
 # - variables (optional): MANUAL_REVIEWER (default carlassaraf), REVIEW_MODEL
 #   (default claude-opus-5-5), REVIEW_EFFORT (default medium), AI_DAILY_LIMIT
 #   (default 5 per PR), CLOSE_APPROVED (default true).

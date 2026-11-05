@@ -53,13 +53,13 @@ The task list is in the course materials. Branch names are the task names:
    - ✅ **approved**: the task is done. The bot closes the pull request.
    - ❌ **changes needed**: the review lists what to change, most important first, with the file
      and line where it can. Some items also show as comments on the lines in "Files changed".
-   - 👀 **a teacher will review this**: the checks passed but couldn't decide everything. A
-     teacher looks at it; you don't need to do anything.
+   - 👀 **an instructor will review this**: the checks passed but couldn't decide everything. A
+     instructor looks at it; you don't need to do anything.
 
 5. To fix something, commit on the same branch and push again. Every push gets a new review
    on the same pull request. Don't open a new pull request.
 
-Your first pull request may wait for a teacher to approve running the checks. That happens once
+Your first pull request may wait for an instructor to approve running the checks. That happens once
 for new GitHub accounts.
 
 ### Good to know
@@ -68,7 +68,7 @@ for new GitHub accounts.
   shows your L3 to L6 work. That's expected: the review looks at the task's files, not only the
   latest changes.
 - Don't change files in `.github/`. A pull request that does gets no automatic review, only a
-  teacher's.
+  instructor's.
 - The checks build your code on GitHub's servers, so a task approved here builds without your
   local setup. Results show in the pull request's "Checks" tab as well, with the build log.
 - Some tasks have rules a script can't judge. When the bot reviews those too, it does so at most
@@ -78,7 +78,7 @@ for new GitHub accounts.
   runs the automatic checks in your fork's Actions tab. Only a pull request gets the full review
   and counts as a submission.
 
-## For teachers
+## For instructors
 
 Setup on `iomico-public/zephyr-course` before the batch starts:
 
@@ -97,7 +97,7 @@ Setup on `iomico-public/zephyr-course` before the batch starts:
 
   | Variable | Default | Meaning |
   | --- | --- | --- |
-  | `AI_REVIEW` | off | `on` runs the AI review; needs the secret. Off, tasks with AI rules (L4, L5-task2) pass the scripts and wait for a teacher with `needs-teacher` |
+  | `AI_REVIEW` | off | `on` runs the AI review; needs the secret. Off, tasks with AI rules (L4, L5-task2) pass the scripts and wait for an instructor with `needs-instructor` |
   | `MANUAL_REVIEWER` | `carlassaraf` | Mentioned when the bot can't decide |
   | `REVIEW_MODEL` | `claude-opus-5-5` | Model for the AI review (`claude-sonnet-5-5` costs half) |
   | `REVIEW_EFFORT` | `medium` | `low`, `medium` or `high` |
@@ -105,7 +105,7 @@ Setup on `iomico-public/zephyr-course` before the batch starts:
   | `CLOSE_APPROVED` | `true` | Close approved pull requests |
 
 - **Labels**: the bot creates them when first needed: one per task, plus `approved`,
-  `changes-needed` and `needs-teacher`.
+  `changes-needed` and `needs-instructor`.
 - **Ruleset on `main`**: block merges and pushes for everyone except admins.
 
 The rules each task is checked against are in `.github/rubric/`. To try the AI review on a local

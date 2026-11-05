@@ -233,7 +233,7 @@ def check(report, kconf):
         if len(bools) >= 2 and not first(bools, lambda n: mentions(n, word)):
             report.note(f'No Expert option mentions "{word}"; the task names it "{label}".')
 
-    # Extras beyond the spec (grade 5 signal for the teacher; never fails).
+    # Extras beyond the spec (grade 5 signal for the instructor; never fails).
     if led:
         expected = 1 + len(members) + 1 + 1 + 2 + 2  # led, options, hidden, adv, 2 ints, 2 bools
         syms = {n.item for n in led_scope if is_sym(n)}

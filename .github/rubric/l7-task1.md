@@ -22,7 +22,7 @@ Using the l6-task1 sensor driver, add a `sensor` root shell command with the sub
 - The app builds for the board in `board.txt`, and the driver and the shell code are compiled
   into it.
 
-## Decided by a teacher
+## Decided by an instructor
 - A handler the script can't find (registered through a macro of the student's own).
 
 ## Not checked

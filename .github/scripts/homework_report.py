@@ -11,9 +11,9 @@ entry of the course feedback file (feedback/students/<nickname>.json):
      "notes": [...], "error": null | {"message", "path", "line"}}
 
 "error" means the checker could not evaluate the submission (for example the
-Kconfig does not parse); a teacher should look at it. "under_review" means every
+Kconfig does not parse); an instructor should look at it. "under_review" means every
 check that could be decided passed, but some can't be decided from the code
-(check `ok` is null); a teacher decides those.
+(check `ok` is null); an instructor decides those.
 """
 import json
 import os
@@ -37,7 +37,7 @@ class Report:
         return ok
 
     def unsure(self, label, why, path=None, line=None):
-        """A requirement the checker can't decide from the code: a teacher looks. Never fails the task."""
+        """A requirement the checker can't decide from the code: an instructor looks. Never fails the task."""
         self.checks.append({"ok": None, "label": label, "message": why, "path": path, "line": line})
 
     def note(self, message):
@@ -95,7 +95,7 @@ class Report:
         if self.error:
             print(f"[ERROR] {self.error['message']}")
         for c in self.checks:
-            print(f"[{ {True: 'PASS', False: 'FAIL', None: 'TEACHER'}[c['ok']] }] {c['label']}")
+            print(f"[{ {True: 'PASS', False: 'FAIL', None: 'INSTRUCTOR'}[c['ok']] }] {c['label']}")
             if c["ok"] is not True and c["message"] != c["label"]:
                 print(f"       -> {c['message']}")
         for n in self.notes:
@@ -112,7 +112,8 @@ class Report:
                 json.dump(self.result(), f, indent=2)
                 f.write("\n")
 
-        return 0 if status == "approved" else 1
+        # A rule left for an instructor isn't the student's failure: don't show a red check for it.
+        return 0 if status in ("approved", "under_review") else 1
 
     def _annotate(self):
         for c in self.changes():
@@ -147,7 +148,7 @@ def render_markdown(result, heading=3):
         lines += ["No automatic checks for this task yet.", ""]
     else:
         unsure = sum(1 for c in checks if c.get("ok") is None)
-        extra = f", {unsure} for a teacher" if unsure else ""
+        extra = f", {unsure} for an instructor" if unsure else ""
         lines += [f"**{status.replace('_', ' ')}** ({passed}/{len(checks)} checks passed{extra})", ""]
     if result.get("error"):
         lines += [f"> {_cell(result['error']['message'])}", ""]
@@ -157,10 +158,10 @@ def render_markdown(result, heading=3):
         for c in failed:
             lines.append(f"| {_cell(c.get('message') or c.get('label', ''))} | {_where(c)} |")
         lines.append("")
-    teacher = [c for c in checks if c.get("ok") is None]
-    if teacher:
-        lines += ["**For a teacher** (can't be decided from the code)", ""]
-        lines += [f"- {_cell(c.get('label', ''))}: {_cell(c.get('message', ''))}" for c in teacher] + [""]
+    instructor = [c for c in checks if c.get("ok") is None]
+    if instructor:
+        lines += ["**For an instructor** (can't be decided from the code)", ""]
+        lines += [f"- {_cell(c.get('label', ''))}: {_cell(c.get('message', ''))}" for c in instructor] + [""]
     notes = result.get("notes") or []
     if notes:
         lines += ["**Notes**", ""] + [f"- {n}" for n in notes] + [""]
