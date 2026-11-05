@@ -353,6 +353,8 @@ def info_for(board, declared):
 ERROR_RES = (  # most specific first
     re.compile(r"devicetree error: .*"),
     re.compile(r"(?P<path>[^\s:]+\.(?:c|h|cpp|dts|dtsi|overlay|conf)):(?P<line>\d+):(?:\d+:)? (?:fatal )?error: .*"),
+    # Link errors: the missing symbol, not collect2's "ld returned 1 exit status".
+    re.compile(r"(?P<path>[^\s:]+\.(?:c|cpp|cc)):(?P<line>\d+): (?:undefined reference to|multiple definition of) .*"),
     re.compile(r"CMake Error.*"),
     re.compile(r"(?:error|ERROR): (?!command exited with status).*"),  # not west's "cmake failed" summary
 )
@@ -367,6 +369,13 @@ def first_error(log_path, root):
             lines = [re.sub(r"\x1b\[[0-9;]*m", "", l).strip() for l in f]
     except OSError:
         return None, None, None
+    # An invalid zephyr/module.yml: CMake only says "validation.invalid"; the reason comes later.
+    for i, l in enumerate(lines):
+        m = re.match(r'ERROR: (Malformed .*) in file:\s*(\S*)', l)
+        if m:
+            path = prefix.sub("", m.group(2) or (lines[i + 1] if i + 1 < len(lines) else ""))
+            why = next((re.sub(r"\.?\s*Path: .*", "", x[2:]) for x in lines[i:i + 8] if x.startswith("- ")), "")
+            return f"{m.group(1)} in {path}" + (f": {why}." if why else "."), path or None, None
     for rx in ERROR_RES:
         for i, l in enumerate(lines):
             m = rx.search(l)
@@ -386,7 +395,7 @@ def first_error(log_path, root):
             if "path" in rx.groupindex:
                 path = prefix.sub("", m.group("path"))
                 line = int(m.group("line"))
-            return msg[:300], path, line
+            return msg.replace("`", "'")[:300], path, line  # GNU quotes `like this'
     return None, None, None
 
 
