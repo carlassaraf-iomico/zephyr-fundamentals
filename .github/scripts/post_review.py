@@ -184,6 +184,12 @@ def decide(task, result, result_problem, touches_github, ai_call):
     ai = ai_call()
     if ai is None:
         return None  # daily limit: the caller explains
+    if ai["status"] == "off":  # AI review switched off: the teacher's batch review covers these rules
+        if status == "approved":
+            return ("under_review", "All automatic checks passed. A teacher will check the rest of "
+                    "this task; you don't need to do anything.", [], "", False)
+        return ("under_review", "This task has no automatic checks yet. A teacher will review it; "
+                "you don't need to do anything.", [], "", False)
     if ai["status"] == "approved":
         return ("approved", "All automatic checks passed, and the code meets the task's other rules.",
                 [], ai.get("reason", ""), True)
@@ -308,6 +314,8 @@ def main():
     reviewer = (os.environ.get("MANUAL_REVIEWER") or "carlassaraf").lstrip("@")
     daily_cap = int(os.environ.get("AI_DAILY_LIMIT") or 5)
     close_approved = os.environ.get("CLOSE_APPROVED", "true") != "false"
+    # Off unless AI_REVIEW=on and the API key is set.
+    ai_enabled = os.environ.get("AI_REVIEW") == "on" and bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     run = {}
     if args.event and Path(args.event).is_file():
@@ -360,8 +368,8 @@ def main():
             return ai_out
         if ai_reviews_today(reviews) >= daily_cap:
             return None
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            ai_out.update(status="under_review", reason="The AI review is not set up (no API key).")
+        if not ai_enabled:
+            ai_out.update(status="off")
             return ai_out
         changed = {f["filename"] for f in pr_files}
         files, skipped = head_files(args.repo, sha, task, changed)
@@ -386,7 +394,9 @@ def main():
     if ai_out.get("usage"):
         log(f"AI review: {ai_out.get('model')} {ai_out['usage']} status={ai_out.get('status')} "
             f"reason={ai_out.get('reason')!r}")
-    body = compose(task, sha, status, summary, changes, reason, ai_ran, result, reviewer)
+    # With the AI off, L4-L7 all wait for a teacher: don't mention anyone on every PR.
+    mention = None if ai_out.get("status") == "off" else reviewer
+    body = compose(task, sha, status, summary, changes, reason, ai_ran, result, mention)
     post(args.repo, pr, sha, body, changes, pr_files, args.dry_run)
     set_labels(args.repo, pr, task, status, args.dry_run)
     if status == "approved" and close_approved:

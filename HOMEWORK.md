@@ -71,8 +71,8 @@ for new GitHub accounts.
   teacher's.
 - The checks build your code on GitHub's servers, so a task approved here builds without your
   local setup. Results show in the pull request's "Checks" tab as well, with the build log.
-- The full review (automatic checks plus the rules a script can't judge) runs at most 5 times a
-  day per pull request. After that, the automatic checks still run on each push, and the rest of
+- Some tasks have rules a script can't judge. When the bot reviews those too, it does so at most
+  5 times a day per pull request. After that, the automatic checks still run on each push, and the rest of
   the review waits.
 - Pushing a tag, as in earlier courses (`git tag l4-task1 && git push origin l4-task1`), still
   runs the automatic checks in your fork's Actions tab. Only a pull request gets the full review
@@ -91,11 +91,13 @@ Setup on `iomico-public/zephyr-course` before the batch starts:
   - Workflow permissions: read repository contents.
   - Allowed actions: GitHub-owned, plus `zephyrproject-rtos/*`.
 - **Environment `ai-review`**: deployment branches limited to `main`. Secret
-  `ANTHROPIC_API_KEY`, from a dedicated Console workspace with a monthly spend limit.
+  `ANTHROPIC_API_KEY`, from a dedicated Console workspace with a monthly spend limit. Only needed
+  with `AI_REVIEW=on`.
 - **Variables** (optional, Settings → Secrets and variables → Actions → Variables):
 
   | Variable | Default | Meaning |
   | --- | --- | --- |
+  | `AI_REVIEW` | off | `on` runs the AI review; needs the secret. Off, tasks with AI rules (L4, L5-task2, L6, L7) pass the scripts and wait for a teacher with `needs-teacher` |
   | `MANUAL_REVIEWER` | `carlassaraf` | Mentioned when the bot can't decide |
   | `REVIEW_MODEL` | `claude-opus-5-5` | Model for the AI review (`claude-sonnet-5-5` costs half) |
   | `REVIEW_EFFORT` | `medium` | `low`, `medium` or `high` |

@@ -9,6 +9,8 @@
 #
 # Repository setup (see HOMEWORK.md, "For teachers"):
 # - environment `ai-review` with secret ANTHROPIC_API_KEY, deployable from main only;
+# - variable AI_REVIEW=on to run the AI review (default off: tasks with AI rules
+#   pass the scripts, then wait for a teacher with the `needs-teacher` label);
 # - variables (optional): MANUAL_REVIEWER (default carlassaraf), REVIEW_MODEL
 #   (default claude-opus-5-5), REVIEW_EFFORT (default medium), AI_DAILY_LIMIT
 #   (default 5 per PR), CLOSE_APPROVED (default true).
@@ -63,6 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_REVIEW: ${{ vars.AI_REVIEW }}
           MANUAL_REVIEWER: ${{ vars.MANUAL_REVIEWER }}
           REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
           REVIEW_EFFORT: ${{ vars.REVIEW_EFFORT }}
