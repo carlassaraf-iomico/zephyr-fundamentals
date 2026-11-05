@@ -102,7 +102,7 @@ def split_args(text):
             cur = []
         else:
             cur.append(c)
-    if "".join(cur).strip():
+    if out or "".join(cur).strip():  # keep an empty last argument (a blanked string): positions matter
         out.append("".join(cur).strip())
     return out
 
@@ -111,7 +111,7 @@ def calls(code, name, start=0, end=None, member=False):
     """(args text, offset) for every call or macro use of `name(...)` in code[start:end].
     member: also calls through a struct (`api->name(...)`)."""
     end = len(code) if end is None else end
-    for m in re.finditer(r"(?<![\w.%s])%s\s*\(" % ("" if member else ">", re.escape(name)), code[:end]):
+    for m in re.finditer(r"(?<![\w%s])%s\s*\(" % ("" if member else ".>", re.escape(name)), code[:end]):
         if m.start() < start:
             continue
         stop = block_end(code, m.end(), "(", ")")
@@ -489,7 +489,7 @@ def check_app_uses_sensor(report, repo, app, drv):
                  fix=f"Get the sensor in `{where}` from devicetree, e.g. "
                      "`DEVICE_DT_GET_ONE(<vendor>_<name>)` or `DEVICE_DT_GET(DT_NODELABEL(<label>))`.")
     for api in ("sensor_sample_fetch", "sensor_channel_get"):
-        report.check(re.search(r"\b%s\s*\(" % api, code), f"the app calls `{api}()`", path=where,
+        report.check(re.search(r"\b%s(?:_chan)?\s*\(" % api, code), f"the app calls `{api}()`", path=where,
                      fix=f"Call `{api}()` on the sensor device in `{where}`.")
 
 
@@ -552,6 +552,8 @@ def extension_api(repo, drv, app_srcs):
                 out[fn.name] = repo.funcs.get(members.get(m.group(1), ""))
             elif re.search(r"->\s*data\b", fn.body):
                 out[fn.name] = fn
+            elif re.search(r"\bsensor_attr_set\s*\(", fn.body):  # private attributes (SENSOR_ATTR_PRIV_START)
+                out[fn.name] = repo.funcs.get(members.get("attr_set") or drv.members.get("attr_set", ""))
     for s in repo.srcs.values():
         if s.rel in own or s.rel.endswith((".h", ".hpp")):
             continue
@@ -562,28 +564,60 @@ def extension_api(repo, drv, app_srcs):
                 continue
             name = fn.name[len("z_impl_"):] if fn.name.startswith("z_impl_") else fn.name
             out.setdefault(name, fn)
-    for s in app_srcs:  # the app calls the API struct directly: ext_api->set_period(dev, 500)
-        for m in re.finditer(r"->\s*(\w+)\s*\(", s.code):
+    for s in app_srcs:  # the app calls the API struct directly: ext_api->set_period(dev, 500), api.set(dev, 1)
+        for m in re.finditer(r"(?:->|\.)\s*(\w+)\s*\(", s.code):
             if m.group(1) in members and m.group(1) not in SENSOR_MEMBERS:
                 out.setdefault(m.group(1), repo.funcs.get(members[m.group(1)]))
     return out
 
 
-def writes_data(fn):
-    """'data', 'global:<name>' or None: what the function changes."""
+COPY_CALLS = r"\b(?:strn?cpy|strlcpy|memcpy|memmove|memset|snprintf|sprintf|strn?cat)\s*\(\s*&?\s*\(?\s*\w+\s*->"
+LOG_CALLS = {"LOG_INF", "LOG_DBG", "LOG_WRN", "LOG_ERR", "printk", "printf", "ARG_UNUSED", "__ASSERT"}
+
+
+def writes_data(fn, repo=None, members=None, depth=0):
+    """What the function changes: 'data' (through the device), 'global:<name>', 'nothing', or None
+    (can't tell). Follows repo helpers and `api->member(dev, ...)` calls two levels down."""
+    if fn is None:
+        return None
     body = fn.body
+    params = fn.param_names()
     if re.search(r"->\s*data\s*\)*\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", body):  # *((uint32_t *)dev->data) = v
         return "data"
-    if re.search(r"->\s*data\b|\bDEV_DATA\s*\(|\bdevice_get_data\s*\(|\bdev_data\b", body) and \
-            re.search(r"\w\s*->\s*\w+(?:\s*(?:\.|->)\s*\w+|\s*\[[^\]]*\])*\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)|"
-                      r"(?:\+\+|--)\s*\w+\s*->|\w+\s*->\s*\w+\s*(?:\+\+|--)", body):
+    member_write = re.search(r"\w\s*->\s*\w+(?:\s*(?:\.|->)\s*\w+|\s*\[[^\]]*\])*\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)|"
+                             r"(?:\+\+|--)\s*\w+\s*->|\w+\s*->\s*\w+\s*(?:\+\+|--)", body) or re.search(COPY_CALLS, body)
+    if member_write and re.search(r"->\s*data\b|\bDEV_DATA\s*\(|\bdevice_get_data\s*\(|\bdev_data\b", body):
         return "data"
-    for m in re.finditer(r"(?<![\w.>])(\w+)\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", body):
+    # A file-scope variable, directly or through a field: `count = v`, `led_data.value.val1 = v`
+    for m in re.finditer(r"(?<![\w.>])(\w+)(?:\s*(?:\.\s*\w+|\[[^\]]*\]))*\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", body):
         name = m.group(1)
-        declared_here = re.search(r"\b\w+[\s*]+%s\s*=" % re.escape(name), body)
-        if not declared_here and name not in fn.param_names() and \
-                re.search(r"^\s*(?:static\s+)?[\w\s\*]+\b%s\s*(?:=|;|\[)" % re.escape(name), fn.src.code, re.M):
+        declared_here = re.search(r"\b[\w\s\*]+[\s*]%s\s*(?:=|;|\[)" % re.escape(name), body)
+        if not declared_here and name not in params and name not in KEYWORDS and \
+                re.search(r"^\s*(?:static\s+)?(?:volatile\s+)?[\w\s\*]+\b%s\s*(?:=|;|\[)" % re.escape(name),
+                          fn.src.code, re.M):
             return f"global:{name}"
+    if repo is not None and depth < 2:
+        for m in re.finditer(r"(?:(->|\.)\s*)?\b(\w+)\s*\(", body):
+            name = m.group(2)
+            callee = repo.funcs.get((members or {}).get(name, "")) if m.group(1) else repo.funcs.get(name)
+            if callee is None or callee is fn:
+                continue
+            got = writes_data(callee, repo, members, depth + 1)
+            if got and got != "nothing":
+                return got
+    if member_write:
+        return None  # writes something through a pointer the script can't trace
+    calls_left = [n for n in re.findall(r"\b(\w+)\s*\(", body) if n not in KEYWORDS and n not in LOG_CALLS]
+    if not re.search(r"(?<![=!<>])=(?!=)|\+\+|--", body) and not calls_left:
+        return "nothing"
+    if not re.search(r"(?<![=!<>])=(?!=)|\+\+|--", body.split("{", 1)[-1].replace("->data", "")) and \
+            all(n in ("gpio_pin_set_dt", "gpio_pin_get_dt") for n in calls_left):
+        return "nothing"
+    # Only locals declared from the device and reads: `struct x *d = dev->data; return d->n;`
+    assigns = re.findall(r"(?<![=!<>])=(?!=)", body)
+    decls = re.findall(r"\b(?:const\s+)?(?:struct\s+)?\w+\s*\*?\s*\w+\s*=(?!=)", body)
+    if len(assigns) == len(decls) and not re.search(r"\+\+|--", body) and not calls_left:
+        return "nothing"
     return None
 
 
@@ -625,7 +659,9 @@ def check_extension(report, repo, app, drv):
                             f"(`{next(iter(ext))}`) from `{main}`."):
         return None
     impls = {n: ext[n] for n, _ in called}
-    name, caller = next(((n, c) for n, c in called if impls[n] and writes_data(impls[n]) == "data"), called[0])
+    members = all_members(repo, srcs)
+    name, caller = next(((n, c) for n, c in called if impls[n] and writes_data(impls[n], repo, members) == "data"),
+                        called[0])
     member_call = re.search(r"->\s*%s\s*\(" % re.escape(name), caller.code)
     proto = re.search(r"^[ \t]*(?:extern\s+)?(?:static\s+)?[\w\s\*]*\b(?:void|int|bool|char|\w+_t|struct\s+\w+)"
                       r"[\s\*]+%s\s*\([^;{}]*\)\s*;" % re.escape(name), caller.code, re.M)
@@ -647,8 +683,8 @@ def check_extension(report, repo, app, drv):
     impl = ext[name]
     if impl is None:
         report.unsure("the extension API changes the driver's data", f"Couldn't find the code behind `{name}`.")
-        return name
-    what = writes_data(impl)
+        return caller.rel
+    what = writes_data(impl, repo, members)
     if what == "data":
         report.check(True, "the extension API changes a field of the driver's data (`dev->data`)")
     elif what and what.startswith("global:"):
@@ -656,10 +692,15 @@ def check_extension(report, repo, app, drv):
                      path=impl.path, line=impl.line,
                      fix=f"Store the value in the driver's data struct (`dev->data`) in `{impl.name}` instead of "
                          f"the variable `{what[7:]}`, so each device instance has its own.")
+    elif what == "nothing":
+        report.check(False, "the extension API changes a field of the driver's data (`dev->data`)",
+                     path=impl.path, line=impl.line,
+                     fix=f"Make `{impl.name}` change a field of the driver's data struct (`dev->data`); it doesn't "
+                         "change anything now.")
     else:
         report.unsure("the extension API changes a field of the driver's data (`dev->data`)",
                       f"Couldn't tell what `{impl.name}` changes.", path=impl.path, line=impl.line)
-    return name
+    return caller.rel
 
 
 # ---------------------------------------------------------------- shell (l7)
@@ -693,8 +734,9 @@ def shell_tree(repo):
                     continue
                 items = sets.setdefault(a[0], [])
                 for item in a[1:]:
-                    m = re.match(r"(SHELL_CMD_ARG|SHELL_CMD|SHELL_COND_CMD_ARG|SHELL_COND_CMD|SHELL_EXPR_CMD_ARG|"
-                                 r"SHELL_EXPR_CMD)\s*\((.*)\)\s*$", item, re.S)
+                    # `[0] = SHELL_CMD_ARG(...)` (a designated initializer) counts too
+                    m = re.match(r"(?:\[\s*\w+\s*\]\s*=\s*)?(SHELL_CMD_ARG|SHELL_CMD|SHELL_COND_CMD_ARG|SHELL_COND_CMD|"
+                                 r"SHELL_EXPR_CMD_ARG|SHELL_EXPR_CMD)\s*\((.*)\)\s*$", item, re.S)
                     if m:
                         b = split_args(m.group(2))
                         if "COND" in m.group(1) or "EXPR" in m.group(1):
@@ -775,11 +817,21 @@ def print_args(fn):
 
 
 def derived(body, seeds):
-    names = set(seeds)
+    names = {n for n in seeds if n}
+    if not names:
+        return set()  # an empty alternation would match everywhere
     while True:
         alt = r"\b(?:%s)\b" % "|".join(re.escape(n) for n in names)
         new = {m.group(1) for m in re.finditer(r"\b(\w+)\s*(?:\[[^\]]*\])?\s*=(?!=)[^;]*" + alt, body)}
         new |= {m.group(1) for m in re.finditer(alt + r"[^;]*?&\s*(\w+)", body)}  # sscanf(argv[1], "%d", &v)
+        # Set in a branch chosen by the value: `if (strcmp(argv[1], "1") == 0) { on = true; }`
+        for m in re.finditer(r"\bif\s*\(", body):
+            cond_end = block_end(body, m.end(), "(", ")")
+            if not re.search(alt, body[m.end():cond_end]):
+                continue
+            rest = body[cond_end:].lstrip()
+            stmt = rest[1:block_end(rest, 1) - 1] if rest.startswith("{") else rest.split(";", 1)[0]
+            new |= {a.group(1) for a in re.finditer(r"(?<![\w.>])(\w+)\s*=(?!=)", stmt)}
         new -= KEYWORDS
         if new <= names:
             return names
@@ -808,7 +860,9 @@ def check_read(report, repo, cmd):
         m = re.search(r"(\w+)\s*=\s*$", before)
         if m:
             seeds.add(m.group(1))
-        if re.search(r"\b(if|while|return)\s*\(?[^;{}]*$", before[-80:]) or re.search(r"[!?]\s*$", before):
+        # The call is the condition: `if (sensor_channel_get(...))`. (`return sensor_channel_get(...)`
+        # doesn't count: the shell doesn't print a handler's return code.)
+        if re.search(r"\b(if|while)\s*\(?[^;{}]*$", before[-80:]) or re.search(r"[!?]\s*$", before):
             seeds.add("__direct__")
     names = derived(body, seeds - {"__direct__"}) if seeds - {"__direct__"} else set()
     prints = [p for f in fns for p in print_args(f)]
@@ -860,7 +914,9 @@ def check_shell_enabled(report, repo, app, build_dir):
         on = re.search(r"^CONFIG_SHELL=y", read(cfg), re.M)
     else:
         on = any(re.search(r"^\s*CONFIG_SHELL\s*=\s*y", read(os.path.join(repo.root, f)), re.M)
-                 for f in repo.files if f.endswith(".conf") or f.endswith("_defconfig"))
+                 for f in repo.files if f.endswith(".conf") or f.endswith("_defconfig")) or \
+            any(re.search(r"^\s*select\s+SHELL\s*$", read(os.path.join(repo.root, f)), re.M)
+                for f in repo.files if os.path.basename(f).startswith("Kconfig"))  # the build's .config decides in CI
     report.check(on, "the shell is enabled (`CONFIG_SHELL=y`)", path=f"{app}/prj.conf",
                  fix=f"Enable the shell: add `CONFIG_SHELL=y` to `{app}/prj.conf`.")
 
@@ -943,7 +999,8 @@ def check_set(report, repo, app, drv, roots, sets, root):
 
     # The value: whatever comes from argv.
     names = derived(body, {"argv"}) - {"argv", "argc", "sh", "shell", "dev", "ret", "err", "rc"}
-    ext_calls = [(n, a, f) for f in fns for n in ext for a, _ in calls(f.src.code, n, f.start, f.end, member=True)]
+    ext_calls = [(n, a, f, pos) for f in fns for n in ext
+                 for a, pos in calls(f.src.code, n, f.start, f.end, member=True)]
     if not ext_calls:
         other = re.search(r"\bsensor_attr_set\s*\(", body)
         direct = re.search(r"->\s*data\b", body)
@@ -956,9 +1013,27 @@ def check_set(report, repo, app, drv, roots, sets, root):
     else:
         alt = re.compile(r"\b(?:%s)\b|\bargv\b" % "|".join(map(re.escape, names or {"argv"})))
 
-        def passes(n, a, f):
+        def in_value_branch(pos):
+            """The call sits in an `if` branch whose condition reads the value (`if (!strcmp(argv[1], "on"))`)."""
+            code = h.src.code
+            for m in re.finditer(r"\bif\s*\(", code[h.start:pos]):
+                start = h.start + m.end()
+                cond_end = block_end(code, start, "(", ")")
+                if not alt.search(code[start:cond_end - 1]):
+                    continue
+                rest = code[cond_end:]
+                skip = len(rest) - len(rest.lstrip())
+                if rest.lstrip().startswith("{"):
+                    end = block_end(code, cond_end + skip + 1)
+                else:
+                    end = code.find(";", cond_end) + 1
+                if cond_end <= pos < end:
+                    return True
+            return False
+
+        def passes(n, a, f, pos):
             if f is h:
-                return alt.search(a)
+                return alt.search(a) or in_value_branch(pos)
             # In a helper: the helper passes on one of its parameters, and the handler gives it the value.
             params = [p for p in f.param_names() if p]
             return any(re.search(r"\b%s\b" % re.escape(p), a) for p in params) and any(
@@ -969,6 +1044,22 @@ def check_set(report, repo, app, drv, roots, sets, root):
                          "called without it.")
 
     # Out of range: both a minimum and a maximum, or a closed set of values.
+    # The value may also be checked as `atoi(argv[1])` or `strlen(argv[1])` inline, or by a helper
+    # (`in_range(argv[1])`): those count as the value too.
+    body = "\n".join(f.body for f in fns if f.src is h.src)
+    body = re.sub(r"\b(?:atoi|atol|strto\w+|shell_strto\w+|strlen)\s*\((?:[^()]|\([^()]*\))*\bargv\b(?:[^()]|\([^()]*\))*\)",
+                  "__value__", body)
+    # Out-parameters of the parse (`strtol(argv[1], &endptr, 10)`, `&err`) are not the value.
+    names = {n for n in names if not re.search(r"end|err|ptr|^rc$|^ret$|^res$", n, re.I)} | {"__value__"}
+    for f in fns[1:]:
+        if f.src is not h.src:  # the shell validates: only its own helpers count, not the driver's code
+            continue
+        params = f.param_names()
+        for args, _ in calls(h.src.code, f.name, h.start, h.end):
+            for i, a in enumerate(split_args(args)):
+                if i < len(params) and params[i] and re.search(r"\bargv\b|\b(?:%s)\b" % "|".join(map(re.escape, names)), a):
+                    names |= derived(f.body, {params[i]})
+    body = re.sub(r"\b__value__\s*==\s*0\b", "__value__ < 1", body)  # strlen(...) == 0: an empty value
     lower = upper = False
     if names:
         alt = r"(?:%s)" % "|".join(map(re.escape, names))
@@ -978,9 +1069,15 @@ def check_set(report, repo, app, drv, roots, sets, root):
         for m in re.finditer(r"(?<![<>=-])(<=?|>=?)\s*\b%s\b(?!\s*(?:\(|\[|->|\.))" % alt, body):
             upper |= m.group(1).startswith("<")
             lower |= m.group(1).startswith(">")
+    # A sign check before an unsigned parse is a minimum: `if (argv[1][0] == '-')`
+    signs = r"\bargv\s*\[\s*\d+\s*\]" + (r"|\b(?:%s)\b" % "|".join(map(re.escape, names)) if names else "")
+    if re.search(r"(?:%s)\s*\[\s*0\s*\]\s*==\s*'-'" % signs, h.src.text[h.start:h.end]):
+        lower = True
     # A closed set: string compares, shell_strtobool, `v != 0 && v != 1`, or a switch with a default.
     eq = len(re.findall(r"\b(?:%s)\s*(?:!=|==)\s*[\w'\"]+" % "|".join(map(re.escape, names)), body)) if names else 0
-    closed = eq >= 2 or re.search(r"\b(?:strn?cmp|strcasecmp|shell_strtobool)\s*\(", body) or \
+    # One strcmp (`invert = strcmp(argv[1], "1") == 0`) maps everything else to false: not a closed set.
+    closed = eq >= 2 or len(re.findall(r"\b(?:strn?cmp|strn?casecmp)\s*\(", body)) >= 2 or \
+        re.search(r"\bshell_strtobool\s*\(", body) or \
         (names and re.search(r"\bswitch\s*\(\s*(?:%s)\s*\)[^}]*\bdefault\s*:" % "|".join(map(re.escape, names)),
                              body, re.S))
     label = "an out-of-range value is rejected with `shell_error`"
@@ -1013,7 +1110,7 @@ def compiled(build_dir):
         return None
 
 
-def check_build(report, repo, app, build_dir, info, drv, shell_root):
+def check_build(report, repo, app, build_dir, info, drv, shell_root, caller=None):
     if not board_info.check_build(report, info, build_dir, app):
         return
     board = info["board"]
@@ -1037,6 +1134,10 @@ def check_build(report, repo, app, build_dir, info, drv, shell_root):
         rel = shell_root.src.rel
         report.check(any(f.endswith("/" + rel) for f in files), "the shell commands are compiled into the app",
                      path=rel, fix=f"Add `{rel}` to the build of `{app}` (e.g. `target_sources(app PRIVATE ...)`).")
+    if files is not None and caller:  # l6-task2: the file that calls the extension API is the app's
+        report.check(any(f.endswith("/" + caller) for f in files), "the code calling the extension API is built",
+                     path=caller, fix=f"Add `{caller}` to the build of `{app}`: it calls the extension API, but the "
+                                      f"`{board}` build doesn't compile it.")
     dts = os.path.join(build_dir, "zephyr", "zephyr.dts")
     if drv and drv.compat and os.path.isfile(dts) and report.task == "l6-task1":
         code = read(dts)
@@ -1072,17 +1173,17 @@ def main():
     if app != "app":
         report.note(f"The app is in `{app}/`; the course builds on `app/`.")
     drv = check_driver(report, repo, app, args.task)
-    shell_root = None
+    shell_root = caller = None
     if args.task == "l6-task1":
         check_app_uses_sensor(report, repo, app, drv)
     elif args.task == "l6-task2":
-        check_extension(report, repo, app, drv)
+        caller = check_extension(report, repo, app, drv)
     else:
         shell_root = check_shell(report, repo, app, args.task, drv, args.build_dir)
     if args.build_dir:
         info = (board_info.load_info(args.board_info) if args.board_info
                 else board_info.info_for(args.board, args.board_declared))
-        check_build(report, repo, app, args.build_dir, info, drv, shell_root)
+        check_build(report, repo, app, args.build_dir, info, drv, shell_root, caller)
     return report.finish(args.json)
 
 
