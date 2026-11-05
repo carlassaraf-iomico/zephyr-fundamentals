@@ -5,13 +5,15 @@ finish(). finish() prints a PASS/FAIL checklist, adds GitHub annotations and a
 job summary when running in Actions, and writes a result JSON that matches one
 entry of the course feedback file (feedback/students/<nickname>.json):
 
-    {"task": "l3-task1", "status": "approved" | "changes_needed" | "error",
+    {"task": "l3-task1", "status": "approved" | "changes_needed" | "under_review" | "error",
      "ref": "<tag or branch>", "changes": [{"message", "path", "line"}],
      "title": "...", "checks": [{"ok", "label", "message", "path", "line"}],
      "notes": [...], "error": null | {"message", "path", "line"}}
 
 "error" means the checker could not evaluate the submission (for example the
-Kconfig does not parse); a teacher should look at it.
+Kconfig does not parse); a teacher should look at it. "under_review" means every
+check that could be decided passed, but some can't be decided from the code
+(check `ok` is null); a teacher decides those.
 """
 import json
 import os
@@ -34,6 +36,10 @@ class Report:
                             "path": path, "line": line})
         return ok
 
+    def unsure(self, label, why, path=None, line=None):
+        """A requirement the checker can't decide from the code: a teacher looks. Never fails the task."""
+        self.checks.append({"ok": None, "label": label, "message": why, "path": path, "line": line})
+
     def note(self, message):
         """Informational remark; never fails the task."""
         self.notes.append(message)
@@ -46,13 +52,15 @@ class Report:
     def status(self):
         if self.error:
             return "error"
-        return "approved" if all(c["ok"] for c in self.checks) else "changes_needed"
+        if any(c["ok"] is False for c in self.checks):
+            return "changes_needed"
+        return "under_review" if any(c["ok"] is None for c in self.checks) else "approved"
 
     def changes(self):
         if self.error:
             items = [self.error]
         else:
-            items = [c for c in self.checks if not c["ok"]]
+            items = [c for c in self.checks if c["ok"] is False]
         out = []
         for c in items[:MAX_CHANGES]:
             item = {"message": c["message"]}
@@ -80,15 +88,15 @@ class Report:
 
     def finish(self, json_path=None):
         status = self.status
-        passed = sum(c["ok"] for c in self.checks)
+        passed = sum(c["ok"] is True for c in self.checks)
 
         print(f"{self.task}: {self.title}")
         print("=" * 64)
         if self.error:
             print(f"[ERROR] {self.error['message']}")
         for c in self.checks:
-            print(f"[{'PASS' if c['ok'] else 'FAIL'}] {c['label']}")
-            if not c["ok"] and c["message"] != c["label"]:
+            print(f"[{ {True: 'PASS', False: 'FAIL', None: 'TEACHER'}[c['ok']] }] {c['label']}")
+            if c["ok"] is not True and c["message"] != c["label"]:
                 print(f"       -> {c['message']}")
         for n in self.notes:
             print(f"[NOTE] {n}")
@@ -124,34 +132,41 @@ class Report:
             f.write(render_markdown(self.result(), heading=2) + "\n")
 
 
-STATUS_ICON = {"approved": "✅", "changes_needed": "❌", "error": "⚠️", "not_checked": "➖"}
+STATUS_ICON = {"approved": "✅", "changes_needed": "❌", "under_review": "👀", "error": "⚠️", "not_checked": "➖"}
+CHECK_ICON = {True: "✅", False: "❌", None: "👀"}
 
 
 def render_markdown(result, heading=3):
     """The checklist as Markdown, from a result dict. Used by the run summary and the PR review."""
     status = result.get("status", "error")
     checks = result.get("checks") or []
-    passed = sum(1 for c in checks if c.get("ok"))
+    passed = sum(1 for c in checks if c.get("ok") is True)
     title = result.get("title") or result.get("task", "")
     lines = [f"{'#' * heading} {STATUS_ICON.get(status, '⚠️')} {result.get('task', '')}: {title}", ""]
     if status == "not_checked":
         lines += ["No automatic checks for this task yet.", ""]
     else:
-        lines += [f"**{status.replace('_', ' ')}** ({passed}/{len(checks)} checks passed)", ""]
+        unsure = sum(1 for c in checks if c.get("ok") is None)
+        extra = f", {unsure} for a teacher" if unsure else ""
+        lines += [f"**{status.replace('_', ' ')}** ({passed}/{len(checks)} checks passed{extra})", ""]
     if result.get("error"):
         lines += [f"> {_cell(result['error']['message'])}", ""]
-    failed = [c for c in checks if not c.get("ok")]
+    failed = [c for c in checks if c.get("ok") is False]
     if failed:
         lines += ["| What to change | Where |", "| --- | --- |"]
         for c in failed:
             lines.append(f"| {_cell(c.get('message') or c.get('label', ''))} | {_where(c)} |")
         lines.append("")
+    teacher = [c for c in checks if c.get("ok") is None]
+    if teacher:
+        lines += ["**For a teacher** (can't be decided from the code)", ""]
+        lines += [f"- {_cell(c.get('label', ''))}: {_cell(c.get('message', ''))}" for c in teacher] + [""]
     notes = result.get("notes") or []
     if notes:
         lines += ["**Notes**", ""] + [f"- {n}" for n in notes] + [""]
     if checks:
         lines += [f"<details><summary>All {len(checks)} checks</summary>", ""]
-        lines += [f"- {'✅' if c.get('ok') else '❌'} {c.get('label', '')}" for c in checks]
+        lines += [f"- {CHECK_ICON.get(c.get('ok'), '❌')} {c.get('label', '')}" for c in checks]
         lines += ["", "</details>", ""]
     return "\n".join(lines)
 

@@ -93,7 +93,7 @@ def load_result(artifacts, task):
         return None, f"The checks' result can't be read ({e})."
     if result.get("task") != task:
         return None, f"The checks ran for `{result.get('task')}`, not `{task}`."
-    if result.get("status") not in ("approved", "changes_needed", "error", "not_checked"):
+    if result.get("status") not in ("approved", "changes_needed", "under_review", "error", "not_checked"):
         return None, "The checks' result has an unknown status."
     return result, None
 
@@ -175,6 +175,11 @@ def decide(task, result, result_problem, touches_github, ai_call):
     if status == "changes_needed":
         return ("changes_needed", "The automatic checks found something to change.",
                 result.get("changes") or [], "", False)
+    if status == "under_review":  # the scripts passed what they could decide; the rest is the teacher's
+        unsure = [c.get("label", "") for c in result.get("checks") or [] if c.get("ok") is None]
+        return ("under_review", "The automatic checks passed everything they can decide. A teacher will check "
+                "the rest; you don't need to do anything.", [],
+                "Not decided by the checks: " + "; ".join(unsure) + ".", False)
     if task not in ai_review.AI_TASKS:
         if status == "approved":
             return ("approved", "All automatic checks passed.", [], "", False)
@@ -232,9 +237,10 @@ def compose(task, sha, status, summary, changes, reason, ai_ran, result, reviewe
         lines += [extra, ""]
     if result:
         checks = result.get("checks") or []
-        passed = sum(1 for c in checks if c.get("ok"))
-        label = (f"Automatic checks ({passed}/{len(checks)} passed)" if checks
-                 else "Automatic checks")
+        passed = sum(1 for c in checks if c.get("ok") is True)
+        unsure = sum(1 for c in checks if c.get("ok") is None)
+        label = (f"Automatic checks ({passed}/{len(checks)} passed" + (f", {unsure} for a teacher)" if unsure else ")")
+                 if checks else "Automatic checks")
         lines += [f"<details><summary>{label}</summary>", "",
                   render_markdown(result, heading=4), "</details>", ""]
     if status == "approved":
@@ -394,8 +400,11 @@ def main():
     if ai_out.get("usage"):
         log(f"AI review: {ai_out.get('model')} {ai_out['usage']} status={ai_out.get('status')} "
             f"reason={ai_out.get('reason')!r}")
-    # With the AI off, L4-L7 all wait for a teacher: don't mention anyone on every PR.
-    mention = None if ai_out.get("status") == "off" else reviewer
+    # Routine teacher reviews (the AI is off, or a rule the scripts can't decide) only get the
+    # `needs-teacher` label; a mention is for real problems (.github changes, broken checks).
+    routine = not touches_github and result is not None and (
+        ai_out.get("status") == "off" or result.get("status") == "under_review")
+    mention = None if routine else reviewer
     body = compose(task, sha, status, summary, changes, reason, ai_ran, result, mention)
     post(args.repo, pr, sha, body, changes, pr_files, args.dry_run)
     set_labels(args.repo, pr, task, status, args.dry_run)
