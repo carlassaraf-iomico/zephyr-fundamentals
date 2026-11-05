@@ -106,10 +106,17 @@ class BoardDir:
         if not any(f.endswith(".dts") for f in self.files):
             out.append(("a `.dts` file", f"Add the board's devicetree `{n}.dts` to {d}."))
         if f"Kconfig.{n}" not in self.files:
-            out.append((f"`Kconfig.{n}`", f"Add `Kconfig.{n}` to {d}: it selects the board's SoC."))
+            other = [f for f in self.files if f.startswith("Kconfig.") and f[8:] not in
+                     ("defconfig", "sysbuild", "board", "soc")]
+            fix = (f"Rename `{other[0]}` to `Kconfig.{n}`: Zephyr reads the file named after the board."
+                   if other else f"Add `Kconfig.{n}` to {d}: it selects the board's SoC.")
+            out.append((f"`Kconfig.{n}`", fix))
         if not any(f == f"{n}_defconfig" or (f.startswith(n + "_") and f.endswith("_defconfig"))
                    for f in self.files):
-            out.append((f"`{n}_defconfig`", f"Add `{n}_defconfig` to {d}."))
+            other = [f for f in self.files if f.endswith("_defconfig")]
+            fix = (f"Rename `{other[0]}` in {d} to `{n}_defconfig`: Zephyr only reads the defconfig named after "
+                   "the board." if other else f"Add `{n}_defconfig` to {d}.")
+            out.append((f"`{n}_defconfig`", fix))
         return out
 
     def sources(self):
@@ -175,8 +182,11 @@ def find_boards(root, task):
         b.findable = b.root_rel is not None and b.root_rel in roots
 
     def score(b):
-        has_msg = task == "l5-task2" and any(MSG_RE.search(code) for _, code in b.sources())
-        return (b.findable, -len(b.missing()), has_msg, b.root_rel == "", b.rel)
+        # task2: the board that prints the message first (a repo often keeps the task1 board too).
+        srcs = b.sources() if task == "l5-task2" else []
+        has_msg = any(MSG_RE.search(code) for _, code in srcs)
+        has_hook = any(HOOK_RE.search(code) for _, code in srcs)
+        return (has_msg, has_hook, b.findable, -len(b.missing()), b.root_rel == "", b.rel)
     return sorted(dirs, key=score, reverse=True)
 
 
