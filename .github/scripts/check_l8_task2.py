@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check l8-task2: coverage of the ring_buf module.
 
-CI runs the tests with coverage itself, so the student does not need to commit
-the report:
+CI runs the tests with coverage itself, into a folder outside the repository, and
+compares the result with the report the student committed (`twister-out/coverage/`,
+as tasks.md asks):
 
     west twister -T tests/ring_buf -p native_sim --outdir twister-out \\
         --coverage --coverage-tool gcovr --coverage-basedir app/modules/ring_buf
@@ -13,12 +14,15 @@ Checks:
   2. gcovr's summary of app/modules/ring_buf meets the targets in tasks.md:
      lines >= 81%, functions 100%, branches >= 64%. When a target is missed, the
      message names the functions never called or the first lines never run.
+  3. The committed report (gcovr's index.html, or coverage_summary.json) shows the
+     same numbers as CI's run, within TOLERANCE: a stale or hand-made report fails.
 
 Exit code 0 when approved, 1 otherwise.
 """
 import argparse
 import json
 import os
+import re
 import sys
 
 from homework_report import Report
@@ -31,6 +35,12 @@ TARGETS = (  # (summary key, label, minimum %), most actionable first
     ("branch_percent", "Branch", 64.0),
 )
 MAX_LISTED = 5
+COMMITTED = "twister-out/coverage/index.html"
+# Allowed difference, in percentage points, between the committed report and CI's run. Lines and
+# functions depend only on the code; branch counts vary a little between gcc versions.
+TOLERANCE = {"line_percent": 1.0, "function_percent": 0.5, "branch_percent": 5.0}
+HTML_ROWS = {"Lines": "line_percent", "Functions": "function_percent", "Branches": "branch_percent"}
+SKIP_DIRS = {".git", ".github", "deps", ".west", "build"}
 
 
 def load(path):
@@ -133,6 +143,70 @@ def coverage_checks(report, twister_out):
         report.check(ok, check_label, fix=fix, path=path, line=line)
 
 
+def find_committed(root):
+    """The committed report: twister-out/coverage/index.html, or the closest thing to it."""
+    if os.path.isfile(os.path.join(root, COMMITTED)):
+        return COMMITTED
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel = os.path.relpath(dirpath, root)
+        for f in filenames:
+            if (f == "index.html" and os.path.basename(dirpath) == "coverage") or f == "coverage_summary.json":
+                found.append(os.path.normpath(os.path.join(rel, f)))
+    # twister-out*/coverage/index.html first, then any summary JSON
+    return min(found, key=lambda p: (not p.endswith("index.html"), not p.startswith("twister-out"), p),
+               default=None)
+
+
+def committed_numbers(path):
+    """{line_percent, function_percent, branch_percent} from gcovr's HTML or summary JSON, or None."""
+    if path.endswith(".json"):
+        data = load(path) or {}
+        nums = {k: data.get(k) for k in TOLERANCE}
+    else:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return None
+        nums = {}
+        for row, key in HTML_ROWS.items():
+            # gcovr: <th scope="row">Lines:</th> <td ...>81.4%</td>; older versions put counts first
+            m = re.search(r">\s*%s:\s*<.{0,400}?([\d.]+)\s*%%" % row, text, re.S)
+            nums[key] = m.group(1) if m else None
+    try:
+        return {k: float(v) for k, v in nums.items()} if all(v is not None for v in nums.values()) else None
+    except ValueError:
+        return None
+
+
+def committed_checks(report, root, twister_out):
+    rel = find_committed(root)
+    if not report.check(rel, "the coverage report is committed", path=COMMITTED,
+                        fix="Commit the coverage report: run the coverage command, then `git add twister-out/coverage` "
+                            "and push. CI compares it with its own run."):
+        return
+    if rel != COMMITTED:
+        report.note(f"The coverage report is at `{rel}`; tasks.md asks for `twister-out/coverage/`.")
+    mine = committed_numbers(os.path.join(root, rel))
+    if mine is None:
+        report.unsure("the committed report matches CI's run",
+                      f"Couldn't read the coverage numbers from `{rel}`.", path=rel)
+        return
+    ci = load(os.path.join(twister_out, "coverage_summary.json"))
+    if not ci:
+        return  # no CI report: coverage_checks already says so
+    off = []
+    for key, label, _ in TARGETS:
+        if key in ci and abs(float(ci[key]) - mine[key]) > TOLERANCE[key]:
+            name = {"Line": "lines", "Function": "functions", "Branch": "branches"}[label]
+            off.append(f"{name} {mine[key]:.1f}% (CI: {float(ci[key]):.1f}%)")
+    report.check(not off, "the committed report matches CI's run", path=rel,
+                 fix=f"Regenerate and commit `{os.path.dirname(rel) or rel}`: it shows " + ", ".join(off) +
+                     ", so it doesn't come from the tests in this commit.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=".", help="repository root (default: current directory)")
@@ -146,6 +220,7 @@ def main():
     if static_checks(report, os.path.abspath(args.root)):
         run_checks(report, os.path.join(args.twister_out, "twister.json"), args.platform)
         coverage_checks(report, args.twister_out)
+        committed_checks(report, os.path.abspath(args.root), args.twister_out)
     return report.finish(args.json)
 
 
