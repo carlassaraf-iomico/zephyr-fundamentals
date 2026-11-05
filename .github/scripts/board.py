@@ -119,16 +119,20 @@ def zephyr_scripts():
     return Path(base)
 
 
-def load_boards(zephyr_base, root):
+def load_boards(zephyr_base, root, extra_roots=()):
     """All HWMv2 boards in Zephyr plus the repo's own boards/ (L5 custom boards)."""
     import list_boards  # from ZEPHYR_BASE/scripts
-    roots = [zephyr_base, Path(root)]
+    roots = [zephyr_base, Path(root)] + [Path(r) for r in extra_roots]
     args = argparse.Namespace(board_roots=roots, soc_roots=roots, arch_roots=roots,
                               board=None, board_dir=[])
     try:
         return list_boards.find_v2_boards(args), list_boards
     except SystemExit as e:  # e.g. a student board that clashes with a Zephyr one
-        raise RuntimeError(str(e))
+        m = re.search(r"Board\(s\): \{([^}]*)\}, defined multiple times", str(e))
+        if m:
+            names = ", ".join(f"`{n.strip(chr(39)).strip()}`" for n in m.group(1).split(","))
+            raise RuntimeError(f"Rename the board {names}: Zephyr already has a board with that name.")
+        raise RuntimeError(f"Zephyr could not list the boards: {e}")
 
 
 def find_soc(zephyr_base, root, name):
@@ -157,6 +161,34 @@ def yaml_arch(board, identifier):
     return archs.pop() if len(archs) == 1 else None
 
 
+ARCH_SELECTS = {"ARM": "arm", "ARM64": "arm64", "RISCV": "riscv", "XTENSA": "xtensa", "X86": "x86", "ARC": "arc"}
+
+
+def soc_arch(soc):
+    """The arch the SoC's Kconfig selects (`config SOC_SERIES_STM32F4X` / `select ARM`), for boards
+    without a twister YAML, such as boards written from scratch."""
+    syms = {f"SOC_{soc.name.upper()}", f"SOC_SERIES_{(soc.series or '').upper()}",
+            f"SOC_FAMILY_{(soc.family or '').upper()}"}
+    for folder in soc.folder:
+        for kconfig in sorted(Path(folder).rglob("Kconfig*")):
+            text = kconfig.read_text(errors="replace")
+            for m in re.finditer(r"^config (\w+)\b(.*?)(?=^\S|\Z)", text, re.M | re.S):
+                if m.group(1) in syms:
+                    sel = re.search(r"^\s+select (%s)\b" % "|".join(ARCH_SELECTS), m.group(2), re.M)
+                    if sel:
+                        return ARCH_SELECTS[sel.group(1)]
+    return None
+
+
+def board_root_of(board_dir):
+    """The BOARD_ROOT for a board folder: the parent of the closest `boards` folder above it."""
+    p = Path(board_dir).resolve()
+    for parent in [p] + list(p.parents):
+        if parent.name == "boards":
+            return str(parent.parent)
+    return None
+
+
 def xtensa_toolchain(soc):
     """Xtensa toolchains are per SoC: CONFIG_SOC_TOOLCHAIN_NAME, e.g. espressif_esp32."""
     conds = {f"SOC_{soc.name.upper()}", f"SOC_SERIES_{(soc.series or '').upper()}"}
@@ -181,10 +213,19 @@ def manifest_projects(workspace):
         return None
 
 
-def resolve(root, workspace=None):
-    """-> info dict for board.json."""
+def resolve(root, workspace=None, target=None, board_roots=()):
+    """-> info dict for board.json. With `target`, build for that board (an L5 custom board found by
+    the checker, looked up in board_roots too) instead of the one in board.txt."""
     info = {"board": NATIVE, "declared": False, "file": None, "problems": [], "buildable": True,
             "arch": "posix", "toolchain": "host", "projects": [], "board_root": None, "setup": "ok"}
+    if target:
+        if not TARGET_RE.match(target):
+            info["problems"].append(problem(f"`{target[:40]}` is not a valid board name: use letters, digits "
+                                            "and `_`.", path=None))
+            info["buildable"] = False
+            return info
+        info["board"], info["declared"], info["custom"] = target, True, True
+        return resolve_target(info, root, workspace, target, None, board_roots)
     rel, p = find_board_file(root)
     if p:
         info["problems"].append(p)
@@ -201,12 +242,17 @@ def resolve(root, workspace=None):
         info["buildable"] = False
         return info
     info["board"], info["declared"] = target, True
+    return resolve_target(info, root, workspace, target, rel, ())
 
+
+def resolve_target(info, root, workspace, target, rel, board_roots):
+    """Look the target up in Zephyr and record the toolchain and projects it needs."""
+    where = f"`{rel}`" if rel else "the board"
     zephyr_base = zephyr_scripts()
     try:
-        boards, list_boards = load_boards(zephyr_base, root)
+        boards, list_boards = load_boards(zephyr_base, root, board_roots)
     except RuntimeError as e:
-        info["problems"].append(problem(f"Zephyr could not list the boards: {e}", path=rel))
+        info["problems"].append(problem(str(e), path=rel))
         info["buildable"] = False
         return info
     name, revision, quals = TARGET_RE.match(target).groups()
@@ -214,7 +260,7 @@ def resolve(root, workspace=None):
     if board is None:
         close = difflib.get_close_matches(name, boards, n=1, cutoff=0.8)
         hint = (f" Did you mean `{close[0]}`?" if close else "") + " `west boards` lists the board names."
-        info["problems"].append(problem(f"`{rel}` names `{name}`, which this Zephyr version doesn't have.{hint}",
+        info["problems"].append(problem(f"{where} names `{name}`, which this Zephyr version doesn't have.{hint}",
                                         path=rel))
         info["buildable"] = False
         return info
@@ -227,19 +273,25 @@ def resolve(root, workspace=None):
             q = board.socs[0].name
         elif quals.startswith("//"):
             q = board.socs[0].name + "/" + quals[2:]
+    if targets and q not in targets and info.get("custom") and not quals:
+        q = targets[0]  # a custom board with several CPUs: build for the first one
+        info["board"] = target = f"{name}/{q}"
     if targets and q not in targets:
         options = ", ".join(f"`{name}/{t}`" for t in targets[:4])
         what = f"`{target}` is not a target of `{name}`" if quals else f"`{name}` needs its CPU in the name"
-        info["problems"].append(problem(f"{what}: write one of {options} in `{rel}`.", path=rel))
+        info["problems"].append(problem(f"{what}: write one of {options} in {where}.", path=rel))
         info["buildable"] = False
         return info
 
     in_repo = Path(board.dir).resolve().is_relative_to(Path(root).resolve())
     if in_repo:
-        info["board_root"] = "."
+        info["board_root"] = board_root_of(board.dir)
+        info["board_dir"] = os.path.relpath(board.dir, root)
     identifier = f"{name}/{q}" if q else name
     arch = yaml_arch(board, identifier)
     soc = find_soc(zephyr_base, root, q.split("/")[0]) if q else None
+    if arch is None and soc:
+        arch = soc_arch(soc)
     if arch == "xtensa" and soc:
         toolchain = xtensa_toolchain(soc)
     else:
@@ -357,7 +409,7 @@ def devicetree_hint(log_path, board):
     return f"`{board}`'s devicetree has no node labelled `{name}`, which `DT_NODELABEL({name})` needs."
 
 
-def check_build(report, info, build_dir, app, require_file=False):
+def check_build(report, info, build_dir, app, require_file=False, what="the app"):
     """Record the board and build checks. True when the build output exists and can be checked.
     require_file: board.txt is a deliverable of this task (L2), so a missing one fails."""
     board = info["board"]
@@ -371,7 +423,8 @@ def check_build(report, info, build_dir, app, require_file=False):
         if p["kind"] == "note":
             report.note(p["message"])
         else:
-            report.check(False, f"`{BOARD_FILE}` names a board CI can build", fix=p["message"], path=p.get("path"))
+            label = "Zephyr can build for the board" if info.get("custom") else f"`{BOARD_FILE}` names a board CI can build"
+            report.check(False, label, fix=p["message"], path=p.get("path"))
     if not info.get("buildable", True):
         return False
     if info.get("setup") != "ok":
@@ -387,14 +440,14 @@ def check_build(report, info, build_dir, app, require_file=False):
             hint = devicetree_hint(log, board) if log else None
             detail = (f" {hint}" if hint else f" The first error is `{err}`." if err
                       else " The build step of this run shows the error.")
-            report.check(False, f"the app builds for `{board}`",
-                         fix=f"Make the app build for `{board}`: `west build -b {board} {app}` fails.{detail}",
+            report.check(False, f"{what} builds for `{board}`",
+                         fix=f"Make {what} build for `{board}`: `west build -b {board} {app}` fails.{detail}",
                          path=path, line=line)
         else:
             report.note(f"The `{board}` build failed. This is expected when the overlay uses labels that "
                         f"only your board has; declare the board in `{BOARD_FILE}`.")
         return False
-    report.check(True, f"the app builds for `{board}`")
+    report.check(True, f"{what} builds for `{board}`")
     return True
 
 
@@ -406,6 +459,9 @@ def main():
     r = sub.add_parser("resolve", help="read board.txt and write board.json")
     r.add_argument("--root", default=".", help="repository root (default: current directory)")
     r.add_argument("--json", required=True, help="write board.json here")
+    r.add_argument("--target", help="build for this board instead of the one in board.txt (L5)")
+    r.add_argument("--board-root", action="append", default=[],
+                   help="extra BOARD_ROOT to look for --target in (relative to --root); may repeat")
     r.add_argument("--workspace", help="west workspace, to list the projects in west.yml (default: the root's parent)")
     r.add_argument("--github-output", help="also append step outputs to this file ($GITHUB_OUTPUT)")
     m = sub.add_parser("mark", help="set fields in board.json, e.g. setup=failed")
@@ -423,7 +479,8 @@ def main():
         return 0
 
     root = os.path.abspath(args.root)
-    info = resolve(root, args.workspace)
+    info = resolve(root, args.workspace, args.target,
+                   [os.path.join(root, r) for r in args.board_root])
     info["root"] = root
     info["sdk_version"] = sdk_version()
     with open(args.json, "w") as f:

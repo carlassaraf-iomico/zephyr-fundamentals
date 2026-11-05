@@ -8,7 +8,16 @@ description: >
 inputs:
   app:
     description: app folder inside the course repo, e.g. app
-    required: true
+    default: app
+  source:
+    description: folder to build instead of the app, relative to the workspace (L5 builds deps/zephyr/samples/hello_world)
+    default: ''
+  target:
+    description: board to build for instead of the one in board.txt (L5's custom board)
+    default: ''
+  board-roots:
+    description: extra BOARD_ROOT folders to find `target` in, relative to the course repo, space separated
+    default: ''
   workspace:
     description: west workspace folder that holds the course repo as zephyr-course/
     default: ws
@@ -28,9 +37,15 @@ runs:
       id: resolve
       shell: bash
       working-directory: ${{ inputs.workspace }}
-      run: >
-        python3 zephyr-course/.github/scripts/board.py resolve
-        --root zephyr-course --json board.json --github-output "$GITHUB_OUTPUT"
+      env:
+        TARGET: ${{ inputs.target }}
+        BOARD_ROOTS: ${{ inputs.board-roots }}
+      run: |
+        args=()
+        [ -z "$TARGET" ] || args+=(--target "$TARGET")
+        for r in $BOARD_ROOTS; do args+=(--board-root "$r"); done
+        python3 zephyr-course/.github/scripts/board.py resolve \
+          --root zephyr-course --json board.json --github-output "$GITHUB_OUTPUT" "${args[@]}"
 
     # Only the HALs this board needs (e.g. hal_stm32 + cmsis_6), cached per west.yml and board family.
     - name: Cache modules
@@ -100,6 +115,7 @@ runs:
         SDK_VERSION: ${{ steps.resolve.outputs.sdk-version }}
         BOARD_ROOT_DIR: ${{ steps.resolve.outputs.board-root }}
         APP_DIR: ${{ inputs.app }}
+        SOURCE: ${{ inputs.source }}
         BUILD_DIR: ${{ inputs.build-dir }}
       run: |
         if grep -q '"setup": "failed"' board.json; then
@@ -112,8 +128,8 @@ runs:
           export ZEPHYR_TOOLCHAIN_VARIANT=zephyr ZEPHYR_SDK_INSTALL_DIR="$HOME/zephyr-sdk-$SDK_VERSION"
         fi
         extra=()
-        # A board defined in the repo itself (the L5 custom board).
-        [ -z "$BOARD_ROOT_DIR" ] || extra=(-- "-DBOARD_ROOT=$PWD/zephyr-course")
+        # A board defined in the repo itself (the L5 custom board): the folder that holds its boards/.
+        [ -z "$BOARD_ROOT_DIR" ] || extra=(-- "-DBOARD_ROOT=$BOARD_ROOT_DIR")
         # A failed build is feedback, not a CI error: the checker quotes the log's first error.
-        west build -p -b "$BOARD" -d "$BUILD_DIR" "zephyr-course/$APP_DIR" "${extra[@]}" 2>&1 | tee build.log || true
+        west build -p -b "$BOARD" -d "$BUILD_DIR" "${SOURCE:-zephyr-course/$APP_DIR}" "${extra[@]}" 2>&1 | tee build.log || true
         python3 zephyr-course/.github/scripts/board.py mark board.json build_log=build.log

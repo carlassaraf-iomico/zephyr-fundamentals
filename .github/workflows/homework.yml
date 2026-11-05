@@ -152,6 +152,58 @@ jobs:
             ws/build/zephyr/.config
           if-no-files-found: ignore
 
+  # l5-task1 (copy/rename) and l5-task2 (from scratch): build Zephyr's hello_world for the custom board.
+  l5:
+    if: startsWith(inputs.task || github.ref_name, 'l5-task1') || startsWith(inputs.task || github.ref_name, 'l5-task2')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ws
+    env:
+      TASK: ${{ startsWith(inputs.task || github.ref_name, 'l5-task2') && 'l5-task2' || 'l5-task1' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/zephyr-course
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The board folder Zephyr should build (empty when there is none; the check step explains).
+      - name: Find the custom board
+        id: board
+        run: python3 zephyr-course/.github/scripts/check_l5.py --task "$TASK" --root zephyr-course --print-board --github-output "$GITHUB_OUTPUT"
+
+      - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
+        if: steps.board.outputs.board != ''
+
+      - uses: ./ws/zephyr-course/.github/actions/board-build
+        if: steps.board.outputs.board != ''
+        with:
+          target: ${{ steps.board.outputs.board }}
+          board-roots: ${{ steps.board.outputs.board-root }}
+          source: deps/zephyr/samples/hello_world
+
+      - name: Check the custom board
+        env:
+          FOUND: ${{ steps.board.outputs.board }}
+        run: |
+          args=()
+          [ -z "$FOUND" ] || args=(--build-dir build --board-info board.json)
+          python3 zephyr-course/.github/scripts/check_l5.py --task "$TASK" --root zephyr-course "${args[@]}" --json result.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.TASK }}-result
+          path: |
+            ws/result.json
+            ws/board.json
+            ws/build.log
+          if-no-files-found: ignore
+
   # l8-task1 (tests pass) and l8-task2 (coverage) share the build; task 2 adds coverage.
   l8:
     if: startsWith(inputs.task || github.ref_name, 'l8-task1') || startsWith(inputs.task || github.ref_name, 'l8-task2')
