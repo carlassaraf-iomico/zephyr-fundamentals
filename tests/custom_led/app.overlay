@@ -1,0 +1,9 @@
+/* The LED under test: pin 5 of the emulated GPIO controller. */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	custom_led: custom-led {
+		compatible = "course,custom-led";
+		gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+	};
+};

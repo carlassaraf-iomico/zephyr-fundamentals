@@ -1,0 +1,11 @@
+common:
+  tags: homework
+  platform_allow:
+    - native_sim
+    - qemu_x86
+  integration_platforms:
+    - native_sim
+tests:
+  homework.l7_task1: {}
+  homework.l7_task2:
+    extra_args: TEST_TASK2=1

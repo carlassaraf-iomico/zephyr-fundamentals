@@ -1,0 +1,2 @@
+# The course driver's vendor prefix (compatible "course,custom-led"); twister treats unknown ones as errors.
+course	Zephyr course homework

@@ -5,7 +5,7 @@
 #   git tag l3-task1 && git push origin l3-task1
 # Only the job for that task runs. Results show in the run's summary page and as
 # annotations on the files that need changes. On a pull request, the
-# "Homework review" workflow then posts them on the PR, with the AI review.
+# "Homework review" workflow then posts them on the PR.
 #
 # This job builds and runs the student's code, so it must never get secrets: it
 # runs with a read-only token, and pull_request runs from forks get no secrets.
@@ -299,7 +299,8 @@ jobs:
           if-no-files-found: ignore
 
   # l6-task1/2 (sensor driver, extension API) and l7-task1/2 (shell commands): build the app for
-  # the board in board.txt, then check the driver and shell code and what the build compiled.
+  # the board in board.txt, run the course's tests for the task on native_sim with the student's
+  # driver (tests/custom_led, tests/custom_led_shell), then check the code, the build and the tests.
   l6-l7:
     needs: task
     if: startsWith(needs.task.outputs.task, 'l6-') || startsWith(needs.task.outputs.task, 'l7-')
@@ -320,6 +321,8 @@ jobs:
           python-version: '3.12'
 
       - uses: ./ws/zephyr-course/.github/actions/zephyr-setup
+        with:
+          requirements: base build-test run-test
 
       # Normally app/; another app folder with the task's work is accepted too.
       - name: Find the app folder
@@ -331,6 +334,27 @@ jobs:
         with:
           app: ${{ steps.app.outputs.dir }}
 
+      # The tests come from the branch the PR targets, so a PR can't change what they check.
+      - name: Use the course's tests
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git -C zephyr-course fetch --quiet --depth 1 origin "$BASE_REF"
+          rm -rf zephyr-course/tests/custom_led zephyr-course/tests/custom_led_shell
+          git -C zephyr-course checkout FETCH_HEAD -- tests/custom_led tests/custom_led_shell
+
+      # native_sim builds with the runner's gcc. Compiler warnings in the student's code are not
+      # test failures, hence --disable-warnings-as-errors.
+      - name: Run the course's tests
+        continue-on-error: true  # the checker turns the results into feedback
+        env:
+          ZEPHYR_TOOLCHAIN_VARIANT: host
+        run: |
+          case "$TASK" in l6-*) dir=custom_led ;; *) dir=custom_led_shell ;; esac
+          west twister -T "zephyr-course/tests/$dir" -s "homework.${TASK/-/_}" -p native_sim \
+            --outdir twister-out --inline-logs --disable-warnings-as-errors
+
       - name: Check the driver and shell code
         env:
           APP_DIR: ${{ steps.app.outputs.dir }}
@@ -338,6 +362,7 @@ jobs:
           python3 zephyr-course/.github/scripts/check_l6_l7.py --task "$TASK"
           --root zephyr-course --app "$APP_DIR"
           --build-dir build --board-info board.json
+          --twister-out twister-out
           --json result.json
 
       - uses: actions/upload-artifact@v4
@@ -350,4 +375,5 @@ jobs:
             ws/build.log
             ws/build/zephyr/zephyr.dts
             ws/build/zephyr/.config
+            ws/twister-out/twister.json
           if-no-files-found: ignore

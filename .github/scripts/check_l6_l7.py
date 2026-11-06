@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check l6-task1, l6-task2, l7-task1 and l7-task2: the LED sensor driver and its shell commands.
 
-Requirements (tasks.md, Lectures 6 and 7; the rules are in .github/rubric/):
+Requirements (tasks.md, Lectures 6 and 7):
   l6-task1  A sensor driver for an LED: `.sample_fetch` turns it on, `.channel_get` turns it off;
             GPIO and instances from devicetree; the app calls the sensor API.
   l6-task2  An extension API function, declared in a header, that changes a field of the driver's
@@ -10,12 +10,19 @@ Requirements (tasks.md, Lectures 6 and 7; the rules are in .github/rubric/):
   l7-task2  A `set <value>` subcommand (`SHELL_CMD_ARG`) that rejects a missing or out-of-range
             value with `shell_error` and passes the value to the extension API.
 
+The task fixes the names the course's tests use: the driver is a module in `app/modules/`
+(compatible "course,custom-led", `CONFIG_CUSTOM_LED`, header <custom_led/custom_led.h>), the
+extension API is custom_led_set_period()/custom_led_get_period(), and the `sensor` shell command
+lives in the module behind `CONFIG_CUSTOM_LED_SHELL`.
+
 Layers:
   - Static (always): C sources read with comments and strings blanked, plus the bindings and
-    overlays. Names are whatever the student chose: the driver is found by its sensor API struct,
-    the extension API by what `main` and the shell call.
+    overlays, and the fixed names above.
   - Build (with --build-dir): the app builds for the board in board.txt, the driver and the shell
     code are compiled into it (compile_commands.json), and the devicetree has the driver's node.
+  - Tests (with --twister-out): the course's tests (tests/custom_led, tests/custom_led_shell)
+    ran the student's driver on native_sim. Where they ran, they decide the behaviour rules
+    (LED on/off, the period, what the shell prints and rejects) instead of the static reading.
 
 Some rules can't be settled by reading the code (an LED level that comes from a variable, a
 range the driver checks instead of the shell). Those are recorded as "for an instructor": they never
@@ -29,6 +36,7 @@ Usage:
 Exit code 0 when approved, 1 otherwise.
 """
 import argparse
+import glob
 import json
 import os
 import re
@@ -44,6 +52,13 @@ TASKS = {
     "l7-task1": "sensor shell commands",
     "l7-task2": "shell `set` command",
 }
+# Names the task fixes, so the course's tests can build and call the driver.
+SPEC_COMPAT = "course_custom_led"            # compatible = "course,custom-led"
+SPEC_MODULE = "app/modules"                  # the lecture's module folder
+SPEC_HEADER = "app/modules/include/custom_led/custom_led.h"
+SPEC_API = ("custom_led_set_period", "custom_led_get_period")
+SPEC_NAMES = ('compatible "course,custom-led", the driver module in `app/modules/`, `CONFIG_CUSTOM_LED`, '
+              "`<custom_led/custom_led.h>`")
 SRC_EXT = (".c", ".cpp", ".cc", ".h", ".hpp")
 SKIP_DIRS = {".git", ".github", ".west", "deps", "tests", "twister-out", "build", "node_modules"}
 COURSE_CODE = ("app/modules/calculator", "app/modules/ring_buf")  # given by the course, not the student's
@@ -938,9 +953,9 @@ def check_shell(report, repo, app, task, drv, build_dir):
                             fix="Register a root `sensor` shell command with `SHELL_CMD_REGISTER` and `fetch`, "
                                 "`read` and `info` subcommands (`SHELL_STATIC_SUBCMD_SET_CREATE`)."):
             return None
-        if root.name == "sensor":
-            report.note("The root command is `sensor`, the same name as Zephyr's own sensor shell; that one is "
-                        "only built with `CONFIG_SENSOR_SHELL=y`.")
+        report.check(root.name == "sensor", "the root command is `sensor`", path=root.src.rel, line=root.line,
+                     fix=f"Name the root command `sensor` (`SHELL_CMD_REGISTER(sensor, ...)`) instead of "
+                         f"`{root.name}`: the course's test runs `sensor fetch`, `sensor read` and `sensor info`.")
         for name in ("fetch", "read", "info"):
             report.check(name in kids, f"a `{name}` subcommand", path=root.src.rel, line=root.line,
                          fix=f"Add a `{name}` subcommand to the `{root.name}` shell command.")
@@ -1099,6 +1114,155 @@ def check_set(report, repo, app, drv, roots, sets, root):
                          "when it is out of range.")
 
 
+# ---------------------------------------------------------------- the fixed names
+def kconfig_defines(repo, symbol):
+    rx = re.compile(r"^\s*(?:menu)?config\s+%s\b" % symbol, re.M)
+    return any(rx.search(read(os.path.join(repo.root, f))) for f in repo.files
+               if os.path.basename(f).startswith("Kconfig") and f.startswith(SPEC_MODULE + "/"))
+
+
+def check_spec(report, repo, task, drv):
+    """The names the course's tests rely on."""
+    if not drv:
+        return
+    report.check(drv.src.rel.startswith(SPEC_MODULE + "/"), "the driver is in the `app/modules/` module",
+                 path=drv.src.rel,
+                 fix=f"Move the driver into the `app/modules/` module (`app/modules/drivers/custom_led/`), as in "
+                     f"the lecture: the course's tests build it from there. It's in `{drv.src.rel}` now.")
+    if drv.compat:
+        report.check(drv.compat == SPEC_COMPAT, 'the compatible is "course,custom-led"', path=drv.src.rel,
+                     fix=f'Use `compatible: "course,custom-led"` in the binding and `#define DT_DRV_COMPAT '
+                         f"{SPEC_COMPAT}` in the driver, instead of `{drv.compat}`: the course's tests look the "
+                         "driver up by that name.")
+    report.check(kconfig_defines(repo, "CUSTOM_LED"), "the module defines `CONFIG_CUSTOM_LED`",
+                 path=f"{SPEC_MODULE}/Kconfig",
+                 fix="Name the driver's Kconfig option `CUSTOM_LED` (`config CUSTOM_LED` in the module's "
+                     "`Kconfig`): the course's tests enable `CONFIG_CUSTOM_LED=y`.")
+    header = SPEC_HEADER in repo.srcs
+    report.check(header, "the header is `<custom_led/custom_led.h>`", path=SPEC_HEADER,
+                 fix=f"Put the driver's header at `{SPEC_HEADER}` (included as `<custom_led/custom_led.h>`), "
+                     "with the module's `include/` folder added by `zephyr_include_directories()`.")
+    if task in ("l6-task2", "l7-task2") and header:
+        code = repo.srcs[SPEC_HEADER].code
+        missing = [n for n in SPEC_API if not re.search(r"\b%s\s*\(" % n, code)]
+        report.check(not missing, "the header declares `custom_led_set_period()` / `custom_led_get_period()`",
+                     path=SPEC_HEADER,
+                     fix="Declare `int custom_led_set_period(const struct device *dev, uint32_t period_ms)` and "
+                         f"`uint32_t custom_led_get_period(const struct device *dev)` in `{SPEC_HEADER}`; "
+                         f"`{missing[0] if missing else ''}` is missing.")
+    if task.startswith("l7"):
+        report.check(kconfig_defines(repo, "CUSTOM_LED_SHELL"), "the module defines `CONFIG_CUSTOM_LED_SHELL`",
+                     path=f"{SPEC_MODULE}/Kconfig",
+                     fix="Add `config CUSTOM_LED_SHELL` (depends on `CUSTOM_LED && SHELL`) to the module's "
+                         "`Kconfig`, and build the shell code with `zephyr_library_sources_ifdef("
+                         "CONFIG_CUSTOM_LED_SHELL ...)`: the course's test enables it.")
+
+
+def check_shell_location(report, shell_root):
+    if shell_root:
+        report.check(shell_root.src.rel.startswith(SPEC_MODULE + "/"), "the `sensor` command is in the driver module",
+                     path=shell_root.src.rel,
+                     fix=f"Move the `sensor` shell command from `{shell_root.src.rel}` into the driver module "
+                         "(e.g. `app/modules/drivers/custom_led/custom_led_shell.c`, built with "
+                         "`CONFIG_CUSTOM_LED_SHELL`): the course's test builds the module without your `main`.")
+
+
+# ---------------------------------------------------------------- the course's tests
+TEST_DIR = {"l6-task1": "custom_led", "l6-task2": "custom_led", "l7-task1": "custom_led_shell",
+            "l7-task2": "custom_led_shell"}
+# test case (suite.name) -> (label, what to change when it fails)
+TESTS = {
+    "custom_led.device_ready": (
+        "test: the driver starts", "Make the driver start: in the course's test, `device_is_ready()` is false "
+        "for the `course,custom-led` node. Check `custom_led_init()` and the GPIO setup."),
+    "custom_led.fetch_turns_led_on": (
+        "test: `sensor_sample_fetch()` turns the LED on", "Make `.sample_fetch` turn the LED on: in the course's "
+        "test the LED pin is low after `sensor_sample_fetch()`."),
+    "custom_led.fetch_twice_keeps_led_on": (
+        "test: a second `sensor_sample_fetch()` keeps the LED on", "Turn the LED on in `.sample_fetch` instead of "
+        "toggling it: in the course's test a second `sensor_sample_fetch()` turns it off."),
+    "custom_led.channel_get_turns_led_off": (
+        "test: `sensor_channel_get()` turns the LED off", "Make `.channel_get` turn the LED off: in the course's "
+        "test the LED pin is high after `sensor_channel_get(dev, SENSOR_CHAN_ALL, &val)`."),
+    "custom_led.channel_get_twice_keeps_led_off": (
+        "test: a second `sensor_channel_get()` keeps the LED off", "Turn the LED off in `.channel_get` instead of "
+        "toggling it: in the course's test a second `sensor_channel_get()` turns it on."),
+    "custom_led_period.set_then_get_period": (
+        "test: `custom_led_set_period()` stores the period", "Store the period in the driver's data: in the "
+        "course's test `custom_led_get_period()` doesn't return what `custom_led_set_period()` was given."),
+    "custom_led_shell.fetch_turns_led_on": (
+        "test: `sensor fetch` turns the LED on", "Make `sensor fetch` call `sensor_sample_fetch()` and return 0: "
+        "in the course's test it fails or leaves the LED off."),
+    "custom_led_shell.read_turns_led_off_and_prints": (
+        "test: `sensor read` turns the LED off and prints the result", "Make `sensor read` call "
+        "`sensor_channel_get()` and print the result: in the course's test it fails, leaves the LED on, or "
+        "prints nothing."),
+    "custom_led_shell.info_prints_name_and_ready": (
+        "test: `sensor info` prints the name and ready state", "Make `sensor info` print the device's name "
+        "(`dev->name`) and its ready state (`device_is_ready()`): the course's test doesn't find them."),
+    "custom_led_set.set_valid_period": (
+        "test: `sensor set 250` sets the period", "Make `sensor set 250` pass 250 to `custom_led_set_period()` and "
+        "return 0: in the course's test the period isn't 250 afterwards."),
+    "custom_led_set.set_rejects_missing_value": (
+        "test: `sensor set` without a value fails", "Reject `sensor set` without a value: register `set` with "
+        "`SHELL_CMD_ARG(set, NULL, ..., handler, 2, 0)`, or check `argc` and call `shell_error`."),
+    "custom_led_set.set_rejects_out_of_range": (
+        "test: `sensor set` rejects values outside 100-5000", "Reject periods outside 100-5000 ms in `sensor set`: "
+        "call `shell_error`, return a negative error, and leave the period unchanged."),
+    "custom_led_set.set_rejects_non_number": (
+        "test: `sensor set abc` fails", "Reject a value that isn't a number in `sensor set` (e.g. `sensor set abc`) "
+        "with `shell_error` and a negative error."),
+}
+# Static checks the tests settle when they ran (their behaviour is what the test runs).
+COVERED = {
+    "`.sample_fetch` turns the LED on", "`.channel_get` turns the LED off",
+    "the extension API changes a field of the driver's data (`dev->data`)",
+    "the extension API changes the driver's data",
+    "`fetch` calls `sensor_sample_fetch()`", "`read` calls `sensor_channel_get()`",
+    "`read` prints what `sensor_channel_get()` returns", "`info` prints the device's real name",
+    "`info` prints the ready state from `device_is_ready()`", "the value goes to the extension API",
+}
+
+
+def check_tests(report, task, twister_out, root):
+    """Turn the course's test results into checks. Returns True when the tests ran."""
+    data = None
+    path = os.path.join(twister_out, "twister.json")
+    if os.path.isfile(path):
+        try:
+            data = json.load(open(path))
+        except (OSError, ValueError):
+            data = None
+    scenario = "homework." + task.replace("-", "_")
+    suites = [x for x in (data or {}).get("testsuites", []) if x.get("name", "").endswith(scenario)]
+    test_dir = f"tests/{TEST_DIR[task]}"
+    if not suites:
+        report.note(f"The course's tests (`{test_dir}`) didn't run, so only the static checks apply.")
+        return False
+    suite = suites[0]
+    cases = suite.get("testcases") or []
+    if suite.get("status") in ("error", "failed") and not any(c.get("status") in ("passed", "failed") for c in cases):
+        logs = glob.glob(os.path.join(twister_out, "**", scenario, "build.log"), recursive=True)
+        err = board_info.first_error(logs[0], root)[0] if logs else None
+        if err:  # Zephyr's own headers: keep the path from zephyr/ on
+            err = re.sub(r"\S*/(zephyr/(?:include|drivers|subsys|kernel)/)", r"\1", err)
+        report.check(False, f"the course's tests (`{test_dir}`) build with your driver",
+                     fix=f"Make the course's tests build with your driver: `{test_dir}` fails to build. They use "
+                         f"the names the task fixes: {SPEC_NAMES}"
+                         + (", `custom_led_set_period()`/`custom_led_get_period()`" if task.endswith("task2") else "")
+                         + (", and the `sensor` command behind `CONFIG_CUSTOM_LED_SHELL`" if task.startswith("l7") else "")
+                         + (f". The first error is `{err}`." if err else "."))
+        return False
+    report.check(True, f"the course's tests (`{test_dir}`) build with your driver")
+    for case in cases:
+        parts = case.get("identifier", "").split(".")
+        key = ".".join(parts[-2:])
+        label, fix = TESTS.get(key, (f"test: {parts[-1]}", f"Make the course's test `{parts[-1]}` pass."))
+        if case.get("status") in ("passed", "failed"):
+            report.check(case["status"] == "passed", label, fix=fix)
+    return True
+
+
 # ---------------------------------------------------------------- build
 def compiled(build_dir):
     path = os.path.join(build_dir, "compile_commands.json")
@@ -1159,6 +1323,7 @@ def main():
     ap.add_argument("--board", default="native_sim", help="board the app was built for (local runs)")
     ap.add_argument("--board-declared", action="store_true",
                     help="the student declared this board; a failed build is then a failure, not a note")
+    ap.add_argument("--twister-out", help="twister --outdir of the course's tests for this task")
     ap.add_argument("--json", help="write the result JSON here")
     args = ap.parse_args()
 
@@ -1173,6 +1338,7 @@ def main():
     if app != "app":
         report.note(f"The app is in `{app}/`; the course builds on `app/`.")
     drv = check_driver(report, repo, app, args.task)
+    check_spec(report, repo, args.task, drv)
     shell_root = caller = None
     if args.task == "l6-task1":
         check_app_uses_sensor(report, repo, app, drv)
@@ -1180,6 +1346,10 @@ def main():
         caller = check_extension(report, repo, app, drv)
     else:
         shell_root = check_shell(report, repo, app, args.task, drv, args.build_dir)
+        check_shell_location(report, shell_root)
+    if args.twister_out and check_tests(report, args.task, args.twister_out, root):
+        # The tests ran the behaviour these static checks guess at: theirs is the verdict.
+        report.checks = [c for c in report.checks if c["label"] not in COVERED]
     if args.build_dir:
         info = (board_info.load_info(args.board_info) if args.board_info
                 else board_info.info_for(args.board, args.board_declared))
