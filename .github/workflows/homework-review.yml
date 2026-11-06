@@ -1,19 +1,14 @@
 # Posts the homework review on a pull request, after "Homework checks" ran on it.
 #
-# workflow_run always runs this file from the default branch, with secrets and a
-# write token, so it treats everything from the PR as data:
+# workflow_run always runs this file from the default branch, with a write token,
+# so it treats everything from the PR as data:
 # - it checks out only this repository's default branch (the scripts),
-# - it reads result.json from the check run's artifact and the PR's files through
-#   the API, and never builds or runs them,
-# - the AI call has no tools, and its output is cleaned before it is posted.
+# - it reads result.json from the check run's artifact and the PR's file list
+#   through the API, and never builds or runs anything from the PR.
 #
-# Repository setup (see HOMEWORK.md, "For instructors"):
-# - environment `ai-review` with secret ANTHROPIC_API_KEY, deployable from main only;
-# - variable AI_REVIEW=on to run the AI review (default off: tasks with AI rules
-#   pass the scripts, then wait for an instructor with the `needs-instructor` label);
-# - variables (optional): MANUAL_REVIEWER (default carlassaraf), REVIEW_MODEL
-#   (default claude-opus-5-5), REVIEW_EFFORT (default medium), AI_DAILY_LIMIT
-#   (default 5 per PR), CLOSE_APPROVED (default true).
+# Repository variables (optional): MANUAL_REVIEWER, the instructors asked to review
+# `needs-instructor` PRs, comma-separated (default carlassaraf); CLOSE_APPROVED
+# (default true).
 
 name: Homework review
 
@@ -37,7 +32,6 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: ai-review
     steps:
       # The default branch's scripts only; nothing from the PR.
       - uses: actions/checkout@v4
@@ -48,9 +42,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install the Anthropic SDK
-        run: pip install --quiet 'anthropic==2.5.0'
 
       # Data only: result.json and build logs from the check run.
       - uses: actions/download-artifact@v4
@@ -64,11 +55,6 @@ jobs:
       - name: Review and post
         env:
           GH_TOKEN: ${{ github.token }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AI_REVIEW: ${{ vars.AI_REVIEW }}
           MANUAL_REVIEWER: ${{ vars.MANUAL_REVIEWER }}
-          REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
-          REVIEW_EFFORT: ${{ vars.REVIEW_EFFORT }}
-          AI_DAILY_LIMIT: ${{ vars.AI_DAILY_LIMIT }}
           CLOSE_APPROVED: ${{ vars.CLOSE_APPROVED }}
         run: python3 .github/scripts/post_review.py --artifacts "$RUNNER_TEMP/artifacts"

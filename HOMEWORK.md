@@ -71,48 +71,10 @@ for new GitHub accounts.
   instructor's.
 - The checks build your code on GitHub's servers, so a task approved here builds without your
   local setup. Results show in the pull request's "Checks" tab as well, with the build log.
-- Some tasks have rules a script can't judge. When the bot reviews those too, it does so at most
-  5 times a day per pull request. After that, the automatic checks still run on each push, and the rest of
-  the review waits.
+- L6 and L7 also run the course's tests with your driver: `tests/custom_led` (L6) and
+  `tests/custom_led_shell` (L7). They need the names the task fixes (the `app/modules/` module,
+  `compatible = "course,custom-led"`, `CONFIG_CUSTOM_LED`, `<custom_led/custom_led.h>`). On Linux
+  you can run them yourself: `west twister -T tests/custom_led -p native_sim`.
 - Pushing a tag, as in earlier courses (`git tag l4-task1 && git push origin l4-task1`), still
   runs the automatic checks in your fork's Actions tab. Only a pull request gets the full review
   and counts as a submission.
-
-## For instructors
-
-Setup on `iomico-public/zephyr-course` before the batch starts:
-
-- **Workflows**: `.github/workflows/homework-check.yml` builds and checks the code on the pull
-  request, with no secrets. `.github/workflows/homework-review.yml` runs after it from `main`,
-  reads the result and the PR's files through the API, runs the AI review, and posts.
-- **Settings → Actions → General**:
-  - Fork pull request workflows: "Require approval for first-time contributors who are new to
-    GitHub".
-  - Workflow permissions: read repository contents.
-  - Allowed actions: GitHub-owned, plus `zephyrproject-rtos/*`.
-- **Environment `ai-review`**: deployment branches limited to `main`. Secret
-  `ANTHROPIC_API_KEY`, from a dedicated Console workspace with a monthly spend limit. Only needed
-  with `AI_REVIEW=on`.
-- **Variables** (optional, Settings → Secrets and variables → Actions → Variables):
-
-  | Variable | Default | Meaning |
-  | --- | --- | --- |
-  | `AI_REVIEW` | off | `on` runs the AI review; needs the secret. Off, tasks with AI rules (L4, L5-task2) pass the scripts and wait for an instructor with `needs-instructor` |
-  | `MANUAL_REVIEWER` | `carlassaraf` | Mentioned when the bot can't decide |
-  | `REVIEW_MODEL` | `claude-opus-5-5` | Model for the AI review (`claude-sonnet-5-5` costs half) |
-  | `REVIEW_EFFORT` | `medium` | `low`, `medium` or `high` |
-  | `AI_DAILY_LIMIT` | `5` | AI reviews per pull request in 24 hours |
-  | `CLOSE_APPROVED` | `true` | Close approved pull requests |
-
-- **Labels**: the bot creates them when first needed: one per task, plus `approved`,
-  `changes-needed` and `needs-instructor`.
-- **Ruleset on `main`**: block merges and pushes for everyone except admins.
-
-The rules each task is checked against are in `.github/rubric/`. To try the AI review on a local
-checkout without posting anything:
-
-```sh
-pip install anthropic
-python3 .github/scripts/ai_review.py --task l4-task1 --dir path/to/checkout --dry-run   # prompt only
-python3 .github/scripts/ai_review.py --task l4-task1 --dir path/to/checkout --result result.json
-```

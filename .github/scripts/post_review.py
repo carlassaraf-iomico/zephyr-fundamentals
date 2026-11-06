@@ -9,18 +9,17 @@ with secrets). It never checks out or runs anything from the PR:
 2. Takes the task from the PR's branch name, and refuses to trust a PR that
    changes `.github/` (its check run used the PR's own workflow).
 3. Reads result.json from the check run's artifact and checks it is for that task.
-4. Runs the AI review (ai_review.py) when the scripts passed and the task has
-   rules only the AI can judge. Files come from the PR head through the API.
-5. Posts one review (event COMMENT) with the status, the changes and the
+   The scripts' verdict is final; there is no AI review.
+4. Posts one review (event COMMENT) with the status, the changes and the
    checklist, inline comments on lines in the diff, and labels. Approved PRs
-   are closed.
+   are closed. A PR left for an instructor gets a review request for the
+   instructors in MANUAL_REVIEWER (comma-separated); real problems (a `.github/`
+   change, a broken check run) also mention them in the review.
 
     python3 post_review.py --artifacts DIR            # in the workflow
     python3 post_review.py --artifacts DIR --pr 12 --dry-run   # print, post nothing
 """
 import argparse
-import base64
-import datetime as dt
 import json
 import os
 import re
@@ -28,14 +27,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ai_review  # noqa: E402
 import github_api as gh  # noqa: E402
 from homework_report import render_markdown  # noqa: E402
 
 TASKS = ["l2-task1", "l3-task1", "l4-task1", "l5-task1", "l5-task2", "l6-task1", "l6-task2",
          "l7-task1", "l7-task2", "l8-task1", "l8-task2"]
 TASK_RE = re.compile(r"^(l[2-8]-task[12])(?:$|[^0-9])")
-MARKER = "<!-- homework-bot sha={sha} task={task} status={status} ai={ai} -->"
+# `ai=` is kept (always 0) so reviews posted while there was an AI review still parse.
+MARKER = "<!-- homework-bot sha={sha} task={task} status={status} ai=0 -->"
 MARKER_RE = re.compile(r"<!-- homework-bot sha=(\w+) task=(\S*) status=(\w+) ai=(\d) -->")
 RANK = {"approved": 0, "changes_needed": 1, "under_review": 2}
 LABELS = {
@@ -108,35 +107,6 @@ def bot_reviews(repo, number):
     return out
 
 
-def ai_reviews_today(reviews):
-    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
-    n = 0
-    for r in reviews:
-        if r["ai"] and r["at"]:
-            at = dt.datetime.fromisoformat(r["at"].replace("Z", "+00:00"))
-            n += at >= since
-    return n
-
-
-# ---------------------------------------------------------------- PR head files
-
-def head_files(repo, sha, task, changed):
-    tree = gh.get(f"repos/{repo}/git/trees/{sha}", recursive=1)
-    blobs = {e["path"]: e for e in tree.get("tree", []) if e.get("type") == "blob"}
-
-    def read(path):
-        e = blobs.get(path)
-        if not e or e.get("size", 0) > ai_review.MAX_FILE_CHARS:
-            return None
-        data = gh.get(f"repos/{repo}/git/blobs/{e['sha']}")
-        try:
-            return base64.b64decode(data.get("content", "")).decode("utf-8", errors="replace")
-        except ValueError:
-            return None
-
-    return ai_review.build_files(task, read, set(blobs), changed)
-
-
 def diff_lines(pr_files):
     """{path: set of new-side line numbers GitHub accepts inline comments on}."""
     out = {}
@@ -158,8 +128,9 @@ def diff_lines(pr_files):
 
 # ---------------------------------------------------------------- decision
 
-def decide(task, result, result_problem, touches_github, ai_call):
-    """Returns (status, summary, changes, reason, ai_ran). `ai_call()` runs the AI review."""
+def decide(task, result, result_problem, touches_github):
+    """Returns (status, summary, changes, reason, routine). routine: an expected instructor review
+    (a rule the scripts can't settle), not a problem worth a mention."""
     if touches_github:
         return ("under_review", "This pull request changes files in `.github/`, so its checks "
                 "can't be trusted. An instructor will review it.", [],
@@ -179,31 +150,11 @@ def decide(task, result, result_problem, touches_github, ai_call):
         unsure = [c.get("label", "") for c in result.get("checks") or [] if c.get("ok") is None]
         return ("under_review", "The automatic checks passed everything they can decide. An instructor will check "
                 "the rest; you don't need to do anything.", [],
-                "Not decided by the checks: " + "; ".join(unsure) + ".", False)
-    if task not in ai_review.AI_TASKS:
-        if status == "approved":
-            return ("approved", "All automatic checks passed.", [], "", False)
-        return ("under_review", "This task has no automatic checks yet. An instructor will review it.",
-                [], "No checks and no AI rules for this task.", False)
-
-    ai = ai_call()
-    if ai is None:
-        return None  # daily limit: the caller explains
-    if ai["status"] == "off":  # AI review switched off: the instructor's batch review covers these rules
-        if status == "approved":
-            return ("under_review", "All automatic checks passed. An instructor will check the rest of "
-                    "this task; you don't need to do anything.", [], "", False)
-        return ("under_review", "This task has no automatic checks yet. An instructor will review it; "
-                "you don't need to do anything.", [], "", False)
-    if ai["status"] == "approved":
-        return ("approved", "All automatic checks passed, and the code meets the task's other rules.",
-                [], ai.get("reason", ""), True)
-    if ai["status"] == "changes_needed":
-        lead = ("The automatic checks passed, but the code" if status == "approved"
-                else "The code")
-        return ("changes_needed", f"{lead} doesn't meet all of the task's rules yet.",
-                ai["changes"], ai.get("reason", ""), True)
-    return ("under_review", "An instructor will review this task.", [], ai.get("reason", ""), True)
+                "Not decided by the checks: " + "; ".join(unsure) + ".", True)
+    if status == "approved":
+        return ("approved", "All automatic checks passed.", [], "", False)
+    return ("under_review", "This task has no automatic checks yet. An instructor will review it.",
+            [], "No checks for this task.", False)
 
 
 # ---------------------------------------------------------------- output
@@ -212,7 +163,6 @@ HEADINGS = {
     "approved": "✅ {task} approved",
     "changes_needed": "❌ {task}: changes needed",
     "under_review": "👀 {task}: an instructor will review this",
-    "limited": "⏸️ {task}: review paused",
 }
 
 
@@ -222,19 +172,17 @@ def where(c):
     return f" (`{c['path']}" + (f":{c['line']}" if c.get("line") else "") + "`)"
 
 
-def compose(task, sha, status, summary, changes, reason, ai_ran, result, reviewer, extra=""):
-    # A paused review doesn't count as reviewing the commit, so a rerun can still review it.
-    marker_sha = "limited" if status == "limited" else sha
-    lines = [MARKER.format(sha=marker_sha, task=task or "-", status=status, ai=int(ai_ran)),
+def compose(task, sha, status, summary, changes, reason, result, mention):
+    """mention: instructors to @-mention (a list), for problems only."""
+    lines = [MARKER.format(sha=sha, task=task or "-", status=status),
              f"## {HEADINGS[status].format(task=task or 'Submission')}", "", summary, ""]
     if changes:
         lines += ["### What to change", ""]
         lines += [f"{i}. {c['message']}{where(c)}" for i, c in enumerate(changes, 1)]
         lines.append("")
-    if status == "under_review" and reviewer:
-        lines += [f"@{reviewer}, please review this by hand: {reason or 'see above.'}", ""]
-    if extra:
-        lines += [extra, ""]
+    if status == "under_review" and mention:
+        who = " ".join(f"@{m}" for m in mention)
+        lines += [f"{who}, please review this by hand: {reason or 'see above.'}", ""]
     if result:
         checks = result.get("checks") or []
         passed = sum(1 for c in checks if c.get("ok") is True)
@@ -246,8 +194,6 @@ def compose(task, sha, status, summary, changes, reason, ai_ran, result, reviewe
     if status == "approved":
         lines.append(f"Reviewed commit {sha[:7]}. Nothing else to do for this task; "
                      "this pull request will be closed.")
-    elif status == "limited":
-        lines.append(f"Checked commit {sha[:7]}.")
     else:
         lines.append(f"Reviewed commit {sha[:7]}. Push a new commit to this branch "
                      "to get a new review.")
@@ -304,6 +250,20 @@ def set_labels(repo, pr, task, status, dry_run):
         gh.post(f"repos/{repo}/issues/{pr['number']}/labels", {"labels": sorted(add)})
 
 
+def request_review(repo, pr, instructors, dry_run):
+    """Ask the instructors to review the PR: it shows in their GitHub review queue and notifies them."""
+    who = [i for i in instructors if i.lower() != ((pr.get("user") or {}).get("login") or "").lower()]
+    if not who:
+        return
+    if dry_run:
+        log(f"[dry-run] request review from {who}")
+        return
+    try:
+        gh.post(f"repos/{repo}/pulls/{pr['number']}/requested_reviewers", {"reviewers": who})
+    except gh.GitHubError as e:  # not a collaborator, or already reviewing: the label still marks it
+        log(f"Couldn't request a review from {who}: {e}")
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -313,15 +273,12 @@ def main():
     ap.add_argument("--event", default=os.environ.get("GITHUB_EVENT_PATH"),
                     help="workflow_run event JSON (default: the current event)")
     ap.add_argument("--pr", type=int, help="review this PR instead of finding it from the event")
-    ap.add_argument("--ai-json", type=Path, help="use this AI review instead of calling the API (testing)")
     ap.add_argument("--dry-run", action="store_true", help="print the review; post nothing")
     args = ap.parse_args()
 
-    reviewer = (os.environ.get("MANUAL_REVIEWER") or "carlassaraf").lstrip("@")
-    daily_cap = int(os.environ.get("AI_DAILY_LIMIT") or 5)
+    instructors = [i.strip().lstrip("@") for i in (os.environ.get("MANUAL_REVIEWER") or "carlassaraf").split(",")
+                   if i.strip()]
     close_approved = os.environ.get("CLOSE_APPROVED", "true") != "false"
-    # Off unless AI_REVIEW=on and the API key is set.
-    ai_enabled = os.environ.get("AI_REVIEW") == "on" and bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     run = {}
     if args.event and Path(args.event).is_file():
@@ -354,7 +311,7 @@ def main():
                        f"`{pr['head']['ref']}` is not a task name, so no checks ran.",
                        [{"message": "Push your work to a branch named after the task, e.g. `l4-task1`, "
                                     "and open a pull request from that branch."}],
-                       "", False, None, reviewer)
+                       "", None, None)
         post(args.repo, pr, sha, body, [], pr_files, args.dry_run)
         set_labels(args.repo, pr, None, "changes_needed", args.dry_run)
         return 0
@@ -366,48 +323,13 @@ def main():
         log("The check run was cancelled; nothing to post.")
         return 0
 
-    ai_out = {}
-
-    def ai_call():
-        if args.ai_json:
-            ai_out.update(json.loads(args.ai_json.read_text()))
-            return ai_out
-        if ai_reviews_today(reviews) >= daily_cap:
-            return None
-        if not ai_enabled:
-            ai_out.update(status="off")
-            return ai_out
-        changed = {f["filename"] for f in pr_files}
-        files, skipped = head_files(args.repo, sha, task, changed)
-        try:
-            ai_out.update(ai_review.review(task, result, files, skipped,
-                                           os.environ.get("REVIEW_MODEL") or None,
-                                           os.environ.get("REVIEW_EFFORT") or None))
-        except Exception as e:  # API down, rate limit, ...: an instructor looks instead
-            log(f"AI review failed: {e!r}")
-            ai_out.update(status="under_review", reason=f"The AI review failed ({type(e).__name__}).")
-        return ai_out
-
-    decision = decide(task, result, problem, touches_github, ai_call)
-    if decision is None:
-        body = compose(task, sha, "limited", "The automatic checks passed.", [], "", False, result, None,
-                       extra=(f"This task already had {daily_cap} full reviews in the last 24 hours, "
-                              "so the rest of the review is paused. Push again later to get it."))
-        post(args.repo, pr, sha, body, [], pr_files, args.dry_run)
-        return 0
-    status, summary, changes, reason, ai_ran = decision
-
-    if ai_out.get("usage"):
-        log(f"AI review: {ai_out.get('model')} {ai_out['usage']} status={ai_out.get('status')} "
-            f"reason={ai_out.get('reason')!r}")
-    # Routine instructor reviews (the AI is off, or a rule the scripts can't decide) only get the
-    # `needs-instructor` label; a mention is for real problems (.github changes, broken checks).
-    routine = not touches_github and result is not None and (
-        ai_out.get("status") == "off" or result.get("status") == "under_review")
-    mention = None if routine else reviewer
-    body = compose(task, sha, status, summary, changes, reason, ai_ran, result, mention)
+    status, summary, changes, reason, routine = decide(task, result, problem, touches_github)
+    mention = None if routine else instructors
+    body = compose(task, sha, status, summary, changes, reason, result, mention)
     post(args.repo, pr, sha, body, changes, pr_files, args.dry_run)
     set_labels(args.repo, pr, task, status, args.dry_run)
+    if status == "under_review":
+        request_review(args.repo, pr, instructors, args.dry_run)
     if status == "approved" and close_approved:
         if args.dry_run:
             log(f"[dry-run] close PR #{pr['number']}")
@@ -417,8 +339,7 @@ def main():
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a") as f:
-            f.write(f"PR #{pr['number']} ({task}, {sha[:7]}): **{status}**"
-                    + (f" (AI: {ai_out.get('model')}, {ai_out.get('usage')})" if ai_ran else "") + "\n")
+            f.write(f"PR #{pr['number']} ({task}, {sha[:7]}): **{status}**\n")
     return 0
 
 

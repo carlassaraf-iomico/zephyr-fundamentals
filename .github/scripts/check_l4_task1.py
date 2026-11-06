@@ -258,7 +258,7 @@ def call_args(code, name):
         yield code[m.end():i - 1], m.start()
 
 
-FUNC_RE = re.compile(r"\b(\w+)\s*\([^;{}()]*\)\s*(?:const\s*)?\{")
+FUNC_RE = re.compile(r"\b(\w+)\s*\(([^;{}()]*)\)\s*(?:const\s*)?\{")
 
 
 def derived_names(code, seed):
@@ -306,6 +306,9 @@ def check_sources(report, root, app):
         report.check(uses_alias, "the GPIO comes from `DT_ALIAS(app_led)`", path=main,
                      fix="Get the LED with `GPIO_DT_SPEC_GET(DT_ALIAS(app_led), gpios)`.")
 
+    if uses_alias:
+        check_toggled_led(report, texts, main)
+
     if not report.check(any(re.search(r"\b%s\b" % CONFIG, t) for t in texts.values()),
                         f"the code uses `{CONFIG}`", path=main,
                         fix=f"Use `{CONFIG}` as the blink period in `{main}` instead of a fixed value."):
@@ -325,6 +328,83 @@ def check_sources(report, root, app):
     else:
         report.check(sets_delay, f"`{CONFIG}` sets the blink delay", path=main,
                      fix=f"Sleep for `{CONFIG}` milliseconds between LED toggles, e.g. `k_msleep({CONFIG})`.")
+
+
+# Calls that drive the LED, and which argument names it (the spec, or the port).
+LED_CALLS = {"gpio_pin_toggle_dt": 0, "gpio_pin_set_dt": 0, "gpio_pin_toggle": 0, "gpio_pin_set": 0,
+             "gpio_pin_set_raw": 0, "gpio_port_toggle_bits": 0,
+             # boards whose LED is a PWM or an addressable strip (WS2812)
+             "led_on": 0, "led_off": 0, "led_set_brightness": 0, "led_on_dt": 0, "led_off_dt": 0,
+             "led_set_brightness_dt": 0, "led_strip_update_rgb": 0, "led_strip_update_channels": 0,
+             "pwm_set_dt": 0, "pwm_set_pulse_dt": 0}
+
+
+def base_name(arg):
+    """`&led` -> led, `leds[0]` -> leds, `cfg->led` -> cfg, `led.port` -> led, `LED_SPEC` -> LED_SPEC."""
+    m = re.match(r"\s*[&*(\s]*([A-Za-z_]\w*)", arg)
+    return m.group(1) if m else None
+
+
+def param_arguments(code, pos, name):
+    """When `name` is a parameter of the function around `pos`, the arguments its callers pass for it."""
+    funcs = [(m.group(1), m.group(2), m.end()) for m in FUNC_RE.finditer(code[:pos])
+             if m.group(1) not in ("if", "for", "while", "switch")]
+    if not funcs or not name:
+        return []
+    fname, params, _ = funcs[-1]
+    names = [re.findall(r"\w+", p)[-1] if re.findall(r"\w+", p) else "" for p in params.split(",")]
+    if name not in names:
+        return []
+    i = names.index(name)
+    out = []
+    for args, _ in call_args(code, fname):
+        parts = [a.strip() for a in args.split(",")]
+        # skip the definition itself: its "arguments" are declarations
+        if len(parts) > i and not re.match(r"(const|struct|volatile|static|unsigned|int|void|bool|char)\b", parts[i]):
+            out.append(parts[i])
+    return out
+
+
+def check_toggled_led(report, texts, main):
+    """The LED the code drives is the one from DT_ALIAS(app_led), not led0 or a fixed pin."""
+    label = "the LED that blinks is the one from `DT_ALIAS(app_led)`"
+    ours, other, unknown = [], [], []
+    for f, t in texts.items():
+        names = derived_names(t, "app_led")  # LED_NODE, led, ... built from the alias
+        foreign = derived_names(t, "__never__")
+        for m in re.finditer(r"\bDT_(?:ALIAS|NODELABEL|PATH|CHOSEN)\s*\(\s*(\w+)", t):
+            if m.group(1) != "app_led":
+                foreign |= derived_names(t, m.group(1))
+        foreign -= names
+        for call, idx in LED_CALLS.items():
+            for args, pos in call_args(t, call):
+                parts = [a.strip() for a in args.split(",")]
+                arg = parts[idx] if len(parts) > idx else ""
+                base = base_name(arg)
+                shown = f"{call}({arg}{', ...' if len(parts) > 1 else ''})"
+                where = (f, line_of(t, pos), shown, arg)
+                # A helper's parameter (`blink(&led)` -> `gpio_pin_toggle_dt(spec)`): use the callers' argument.
+                caller_args = param_arguments(t, pos, base) if base not in names | foreign else []
+                if caller_args:
+                    arg = caller_args[0]
+                    base = base_name(arg)
+                if re.search(r"\bapp_led\b", arg) or base in names:
+                    ours.append(where)
+                elif base in foreign or re.search(r"\bDT_(?:ALIAS|NODELABEL)\s*\(", arg):
+                    other.append(where)
+                else:
+                    unknown.append(where)
+    if ours:
+        report.check(True, label)
+    elif other:
+        f, line, call, arg = other[0]
+        report.check(False, label, path=f, line=line,
+                     fix=f"Blink the LED from `DT_ALIAS(app_led)`: `{call}` drives another LED.")
+    elif unknown:
+        f, line, call, arg = unknown[0]
+        report.unsure(label, f"Couldn't tell which LED `{call}` drives.", path=f, line=line)
+    else:
+        report.unsure(label, "No GPIO toggle or set call found; the LED may be driven another way.", path=main)
 
 
 # ---------------------------------------------------------------- build

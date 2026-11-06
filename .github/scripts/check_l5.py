@@ -202,28 +202,100 @@ def check_board(report, root, b):
                      "`app/boards/`, or add its parent folder to `BOARD_ROOT`.")
 
 
+# Zephyr 4.1+ board hooks run before main() too; last batch, ~30 approved boards used them.
+ACCEPT_BOARD_HOOKS = True
+SYS_INIT_RE = re.compile(r"\bSYS_INIT\s*\(\s*(\w+)|\bSYS_INIT_NAMED\s*\(\s*\w+\s*,\s*(\w+)")
+BOARD_HOOK_RE = re.compile(r"\b(board_(?:early|late)_init_hook)\s*\(")
+
+
+def hook_enabled(b, hook):
+    """The board turns the hook on: `select BOARD_LATE_INIT_HOOK` in a Kconfig file, or `=y` in its defconfig."""
+    opt = hook.upper()
+    for dp, _, fs in os.walk(b.path):
+        for f in fs:
+            if f.startswith("Kconfig") or f.endswith("_defconfig"):
+                text = read(os.path.join(dp, f))
+                if re.search(r"^\s*(select\s+%s\b|CONFIG_%s\s*=\s*y)" % (opt, opt), text, re.M):
+                    return True
+    return False
+
+
+def body_of(code, name):
+    """(start, end) of the body of function `name` defined in code, or None."""
+    m = re.search(r"\b%s\s*\([^;{}()]*\)\s*\{" % re.escape(name), code)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while i < len(code) and depth:
+        depth += {"{": 1, "}": -1}.get(code[i], 0)
+        i += 1
+    return m.end(), i - 1
+
+
+def prints_message(srcs, name, depth=0):
+    """(path, line) where function `name` (or a board helper it calls) prints the message, or None."""
+    for p, c in srcs:
+        span = body_of(c, name)
+        if not span:
+            continue
+        m = MSG_RE.search(c, *span)
+        if m:
+            return p, line_of(c, m.start())
+        if depth < 2:
+            for call in re.finditer(r"\b(\w+)\s*\(", c[span[0]:span[1]]):
+                if call.group(1) != name:
+                    got = prints_message(srcs, call.group(1), depth + 1)
+                    if got:
+                        return got
+    return None
+
+
 def check_message(report, root, b):
-    """task2: the board folder prints the message from SYS_INIT or a board init hook."""
-    label = f'the board prints "{MSG}" before `main()`'
+    """task2: a function the board registers with SYS_INIT() prints the message (before main()).
+    Returns (ok, file with the message, init function)."""
+    label = f'the board prints "{MSG}" before `main()` (`SYS_INIT()`' + (" or a board hook)" if ACCEPT_BOARD_HOOKS else ")")
     srcs = b.sources()
+    inits = [(p, m.group(1) or m.group(2), line_of(c, m.start())) for p, c in srcs for m in SYS_INIT_RE.finditer(c)]
+    for p, fn, _ in inits:
+        got = prints_message(srcs, fn)
+        if got:
+            report.check(True, label)
+            return True, got[0], fn
     with_msg = [(p, c) for p, c in srcs if MSG_RE.search(c)]
+    for p, c in with_msg:  # printed from a board hook (a file may define both hooks)
+        m = next((h for h in BOARD_HOOK_RE.finditer(c) if prints_message(srcs, h.group(1))), None)
+        if not m:
+            continue
+        hook = m.group(1)
+        if not ACCEPT_BOARD_HOOKS:
+            report.check(False, label, path=p, line=line_of(c, m.start()),
+                         fix=f'Print "{MSG}" from a function registered with `SYS_INIT()` in `{p}` instead of '
+                             f"`{hook}()`.")
+            return False, p, None
+        if report.check(hook_enabled(b, hook), label, path=p, line=line_of(c, m.start()),
+                        fix=f"Enable `CONFIG_{hook.upper()}` so `{hook}()` runs: add `select {hook.upper()}` to "
+                            f"`Kconfig.{b.name}`, or `CONFIG_{hook.upper()}=y` to `{b.name}_defconfig`."):
+            return True, p, f"hook:{hook}"
+        return False, p, None
+    if with_msg and inits:  # the message is there, but not in the registered function
+        p, fn, line = inits[0]
+        mp, mc = with_msg[0]
+        report.check(False, label, path=mp, line=line_of(mc, MSG_RE.search(mc).start()),
+                     fix=f'Print "{MSG}" from `{fn}()`, the function `{p}` registers with `SYS_INIT()`, so it '
+                         "runs before `main()`.")
+        return False, mp, None
     with_hook = [(p, c) for p, c in srcs if HOOK_RE.search(c)]
-    both = [(p, c) for p, c in with_msg if HOOK_RE.search(c)]
-    if both:
-        p, c = both[0]
-        report.check(True, label)
-        return True, p
     if with_msg:
         p, c = with_msg[0]
         report.check(False, label, path=p, line=line_of(c, MSG_RE.search(c).start()),
                      fix=f'Print "{MSG}" from a `SYS_INIT()` function (or `board_late_init_hook()`) in `{p}`, '
                          "so it runs before `main()`.")
-        return False, p
+        return False, p, None
     if with_hook:
         p, c = with_hook[0]
         report.check(False, label, path=p, line=line_of(c, HOOK_RE.search(c).start()),
                      fix=f'Make the `SYS_INIT` hook in `{p}` print exactly "{MSG}".')
-        return False, p
+        return False, p, None
     elsewhere = None
     for rel, files in walk(root):
         for f in files:
@@ -245,11 +317,11 @@ def check_message(report, root, b):
         report.check(False, label, path=b.rel,
                      fix=f"Add a source file in the board directory `{b.rel}/` that prints \"{MSG}\" from a "
                          "`SYS_INIT()` hook, and add it to the board's `CMakeLists.txt`.")
-    return False, None
+    return False, None, None
 
 
-def check_image(report, root, b, build_dir, msg_file):
-    """task2: the message made it into the hello_world image."""
+def check_image(report, root, b, build_dir, msg_file, init_fn=None):
+    """task2: the message, and the SYS_INIT() entry that prints it, made it into the hello_world image."""
     elf = os.path.join(build_dir, "zephyr", "zephyr.elf")
     try:
         with open(elf, "rb") as f:
@@ -259,6 +331,19 @@ def check_image(report, root, b, build_dir, msg_file):
     label = f'the `hello_world` image contains "{MSG}"'
     if MSG_BYTES_RE.search(data):
         report.check(True, label)
+        if init_fn and init_fn.startswith("hook:"):  # the hook only runs when its option is on
+            opt = init_fn[5:].upper()
+            cfg = os.path.join(build_dir, "zephyr", ".config")
+            if os.path.isfile(cfg):
+                report.check(re.search(r"^CONFIG_%s=y" % opt, read(cfg), re.M),
+                             f"`CONFIG_{opt}` is on in the build", path=msg_file,
+                             fix=f"Enable `CONFIG_{opt}` for `{b.name}` (`select {opt}` in `Kconfig.{b.name}`): "
+                                 f"without it, Zephyr never calls `{init_fn[5:]}()`.")
+        elif init_fn:  # SYS_INIT(fn, ...) links an init entry named __init_<fn>
+            report.check(b"__init_" + init_fn.encode() + b"\0" in data,
+                         f"`{init_fn}()` is registered as an init function in the image", path=msg_file,
+                         fix=f"Make sure `SYS_INIT({init_fn}, ...)` is compiled: the `hello_world` build for "
+                             f"`{b.name}` has no init entry for `{init_fn}()`, so it never runs.")
         return
     fix = (f'The `hello_world` build for `{b.name}` doesn\'t contain "{MSG}": make sure the board\'s source '
            "file is built and its `SYS_INIT` runs.")
@@ -320,13 +405,13 @@ def main():
         others = ", ".join(f"`{o.rel}/`" for o in boards[1:4])
         report.note(f"Checked the board in `{b.rel}/`; the repository also has {others}.")
     check_board(report, root, b)
-    msg_ok, msg_file = check_message(report, root, b) if args.task == "l5-task2" else (False, None)
+    msg_ok, msg_file, init_fn = check_message(report, root, b) if args.task == "l5-task2" else (False, None, None)
     if args.board_info and os.path.isfile(args.board_info):
         info = board_info.load_info(args.board_info)
         built = board_info.check_build(report, info, args.build_dir or "build", HELLO,
                                        what="`hello_world`")
         if built and msg_ok:  # task2; when the source is wrong, that change already says what to fix
-            check_image(report, root, b, args.build_dir or "build", msg_file)
+            check_image(report, root, b, args.build_dir or "build", msg_file, init_fn)
     return report.finish(args.json)
 
 
