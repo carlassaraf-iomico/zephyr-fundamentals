@@ -1,1 +1,1 @@
-frdm_mcx153
+frdm_mcxa153
