@@ -6,11 +6,9 @@
 
 /dts-v1/;
 
-#include <nxp/mcx/mcxa/nxp_mcxa153.dtsi>
-#include "frdm_mcxa153-pinctrl.dtsi"
-#include <zephyr/dt-bindings/gpio/mikro-bus.h>
+#include <nxp/nxp_mcxa153.dtsi>
+#include "mcxa153-pinctrl.dtsi"
 #include <zephyr/dt-bindings/input/input-event-codes.h>
-#include <zephyr/dt-bindings/wuc/wuc_nxp_wuu.h>
 #include <zephyr/dt-bindings/gpio/arduino-header-r3.h>
 #include <freq.h>
 
@@ -28,7 +26,6 @@
 		pwm-0 = &flexpwm0_pwm0;
 		watchdog0 = &wwdt0;
 		ambient-temp0 = &p3t1755;
-		die-temp0 = &temp0;
 	};
 
 	chosen {
@@ -38,9 +35,7 @@
 		zephyr,code-partition = &slot0_partition;
 		zephyr,console = &lpuart0;
 		zephyr,shell-uart = &lpuart0;
-		zephyr,edac = &erm0;
 		zephyr,system-timer-companion = &lptmr0;
-		zephyr,crc = &crc;
 	};
 
 	leds {
@@ -75,28 +70,8 @@
 			label = "User SW3";
 			gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
 			/* SW3 wakes via WUU external pin 9. */
-			wakeup-ctrls = <&wuu NXP_WUU_PIN_9_FALLING_INT>;
 			zephyr,code = <INPUT_KEY_1>;
 		};
-	};
-
-	mikrobus_header: mikrobus-connector {
-		compatible = "mikro-bus";
-		#gpio-cells = <2>;
-		gpio-map-mask = <0xffffffff 0xffffffc0>;
-		gpio-map-pass-thru = <0 0x3f>;
-		gpio-map = <MIKROBUS_AN 0 &gpio3 30 0>,
-			   <MIKROBUS_RST 0 &gpio3 1 0>,
-			   <MIKROBUS_CS 0 &gpio1 3 0>,
-			   <MIKROBUS_SCK 0 &gpio1 1 0>,
-			   <MIKROBUS_MISO 0 &gpio1 2 0>,
-			   <MIKROBUS_MOSI 0 &gpio1 0 0>,
-			   <MIKROBUS_PWM 0 &gpio3 12 0>,
-			   <MIKROBUS_INT 0 &gpio2 5 0>,
-			   <MIKROBUS_RX 0 &gpio3 14 0>,
-			   <MIKROBUS_TX 0 &gpio3 15 0>,
-			   <MIKROBUS_SCL 0 &gpio3 27 0>,
-			   <MIKROBUS_SDA 0 &gpio3 28 0>;
 	};
 
 	arduino_header: arduino-connector {
@@ -134,26 +109,6 @@
 };
 
 &ctimer0 {
-	status = "okay";
-};
-
-&waketimer0 {
-	status = "okay";
-};
-
-&eim0 {
-	status = "okay";
-};
-
-&eim0_channel0 {
-	status = "okay";
-};
-
-&erm0 {
-	status = "okay";
-};
-
-&edma0 {
 	status = "okay";
 };
 
@@ -248,8 +203,6 @@ arduino_i2c: &lpi2c0 {};
 	status = "okay";
 };
 
-mikrobus_spi: &lpspi0 {};
-
 &lpspi1 {
 	pinctrl-0 = <&pinmux_lpspi1>;
 	pinctrl-names = "default";
@@ -276,31 +229,13 @@ arduino_spi: &lpspi1 {};
 	status = "okay";
 };
 
-mikrobus_serial: &lpuart2 {};
-
 /*
  * Uses OS timer as the kernel timer
  */
-&ostimer0 {
-	status = "okay";
-};
-
 zephyr_udc0: &usb {
 	status = "okay";
 };
 
 &wwdt0 {
-	status = "okay";
-};
-
-&crc {
-	status = "okay";
-};
-
-&inputmux0 {
-	status = "okay";
-};
-
-&freqme0 {
 	status = "okay";
 };
