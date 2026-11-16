@@ -1,3 +1,11 @@
+menuconfig LED_SUBSYSTEM
+  bool "LED Subsystem"
+  default n
+  help
+    Enable the LED subsystem menu
+
+if LED_SUBSYSTEM
+
 choice 
   prompt "LED blink sleep time"
   default LED_BLINK_1S
@@ -46,6 +54,8 @@ config CUSTOM_BLINK_PATTERN
   bool "Custom blink pattern"
   default n
 endmenu
+
+endif
 
 endif
 
