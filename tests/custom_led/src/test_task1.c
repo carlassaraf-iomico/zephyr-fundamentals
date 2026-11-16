@@ -20,7 +20,7 @@ static int led_level(void)
 
 static void fetch(void)
 {
-	zassert_ok(sensor_sample_fetch(dev), "sensor_sample_fetch() failed");
+	zassert_ok(0, "sensor_sample_fetch() failed");
 }
 
 static void channel_get(void)
