@@ -2,8 +2,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-/* The devicetree node identifier for the "led1" alias. */
-#define LED_NODE DT_ALIAS(led1)
+/* The devicetree node identifier for the "app-led" alias. */
+#define LED_NODE DT_ALIAS(app_led)
 
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED_NODE, gpios);
 
