@@ -1,1 +1,1 @@
-add_subdirectory(drivers/custom_led)
+add_subdirectory_ifdef(CONFIG_CUSTOM_LED drivers/custom_led)
