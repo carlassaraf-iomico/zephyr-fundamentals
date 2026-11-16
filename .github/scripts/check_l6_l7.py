@@ -10,9 +10,10 @@ Requirements (tasks.md, Lectures 6 and 7):
   l7-task2  A `set <value>` subcommand (`SHELL_CMD_ARG`) that rejects a missing or out-of-range
             value with `shell_error` and passes the value to the extension API.
 
-The task fixes the names the course's tests use: the driver is a module in `app/modules/`
-(compatible "course,custom-led", `CONFIG_CUSTOM_LED`, header <custom_led/custom_led.h>), the
-extension API is custom_led_set_period()/custom_led_get_period(), and the `sensor` shell command
+The task fixes the names the course's tests use: the driver is a module of its own in
+`app/modules/custom_led/`, with its `zephyr/module.yml` there (compatible "course,custom-led",
+`CONFIG_CUSTOM_LED`, header <custom_led/custom_led.h>), the extension API is
+custom_led_set_period()/custom_led_get_period(), and the `sensor` shell command
 lives in the module behind `CONFIG_CUSTOM_LED_SHELL`.
 
 Layers:
@@ -54,10 +55,11 @@ TASKS = {
 }
 # Names the task fixes, so the course's tests can build and call the driver.
 SPEC_COMPAT = "course_custom_led"            # compatible = "course,custom-led"
-SPEC_MODULE = "app/modules"                  # the lecture's module folder
-SPEC_HEADER = "app/modules/include/custom_led/custom_led.h"
+SPEC_MODULE = "app/modules/custom_led"       # the driver's own module, apart from the course's code
+SPEC_MODULE_YML = SPEC_MODULE + "/zephyr/module.yml"
+SPEC_HEADER = SPEC_MODULE + "/include/custom_led/custom_led.h"
 SPEC_API = ("custom_led_set_period", "custom_led_get_period")
-SPEC_NAMES = ('compatible "course,custom-led", the driver module in `app/modules/`, `CONFIG_CUSTOM_LED`, '
+SPEC_NAMES = ('compatible "course,custom-led", the driver module in `app/modules/custom_led/`, `CONFIG_CUSTOM_LED`, '
               "`<custom_led/custom_led.h>`")
 SRC_EXT = (".c", ".cpp", ".cc", ".h", ".hpp")
 SKIP_DIRS = {".git", ".github", ".west", "deps", "tests", "twister-out", "build", "node_modules"}
@@ -1116,28 +1118,45 @@ def check_set(report, repo, app, drv, roots, sets, root):
 
 # ---------------------------------------------------------------- the fixed names
 def kconfig_defines(repo, symbol):
+    """The Kconfig files that define `symbol`: (the ones in the driver's module, the ones elsewhere)."""
     rx = re.compile(r"^\s*(?:menu)?config\s+%s\b" % symbol, re.M)
-    return any(rx.search(read(os.path.join(repo.root, f))) for f in repo.files
-               if os.path.basename(f).startswith("Kconfig") and f.startswith(SPEC_MODULE + "/"))
+    found = [f for f in repo.files
+             if os.path.basename(f).startswith("Kconfig") and rx.search(read(os.path.join(repo.root, f)))]
+    inside = [f for f in found if f.startswith(SPEC_MODULE + "/")]
+    return inside, [f for f in found if f not in inside]
+
+
+def check_kconfig(report, repo, symbol, fix):
+    """`symbol` is defined in the module's Kconfig; when it's only elsewhere, say to move it."""
+    inside, elsewhere = kconfig_defines(repo, symbol)
+    report.check(bool(inside), f"the module defines `CONFIG_{symbol}`", path=f"{SPEC_MODULE}/Kconfig",
+                 fix=(f"Move `config {symbol}` from `{elsewhere[0]}` into the module's Kconfig "
+                      f"(`{SPEC_MODULE}/Kconfig`, or a file it sources): the course's tests load only the "
+                      "module, not your app." if elsewhere else fix))
 
 
 def check_spec(report, repo, task, drv):
     """The names the course's tests rely on."""
     if not drv:
         return
-    report.check(drv.src.rel.startswith(SPEC_MODULE + "/"), "the driver is in the `app/modules/` module",
+    report.check(drv.src.rel.startswith(SPEC_MODULE + "/"), "the driver is in the `app/modules/custom_led/` module",
                  path=drv.src.rel,
-                 fix=f"Move the driver into the `app/modules/` module (`app/modules/drivers/custom_led/`), as in "
-                     f"the lecture: the course's tests build it from there. It's in `{drv.src.rel}` now.")
+                 fix=f"Move the driver into its own module in `{SPEC_MODULE}/` (e.g. "
+                     f"`{SPEC_MODULE}/drivers/custom_led/`): the course's tests build it from there. "
+                     f"It's in `{drv.src.rel}` now.")
+    report.check(SPEC_MODULE_YML in repo.files, "the module's `zephyr/module.yml` is in `app/modules/custom_led/`",
+                 path=SPEC_MODULE_YML,
+                 fix=f"Put the module's `module.yml` at `{SPEC_MODULE_YML}` (with `cmake: .`, `kconfig: Kconfig` "
+                     "and `settings: dts_root: .`): the course's tests load `app/modules/custom_led/` as the "
+                     "module, so a `module.yml` anywhere else isn't found.")
     if drv.compat:
         report.check(drv.compat == SPEC_COMPAT, 'the compatible is "course,custom-led"', path=drv.src.rel,
                      fix=f'Use `compatible: "course,custom-led"` in the binding and `#define DT_DRV_COMPAT '
                          f"{SPEC_COMPAT}` in the driver, instead of `{drv.compat}`: the course's tests look the "
                          "driver up by that name.")
-    report.check(kconfig_defines(repo, "CUSTOM_LED"), "the module defines `CONFIG_CUSTOM_LED`",
-                 path=f"{SPEC_MODULE}/Kconfig",
-                 fix="Name the driver's Kconfig option `CUSTOM_LED` (`config CUSTOM_LED` in the module's "
-                     "`Kconfig`): the course's tests enable `CONFIG_CUSTOM_LED=y`.")
+    check_kconfig(report, repo, "CUSTOM_LED",
+                  fix="Name the driver's Kconfig option `CUSTOM_LED` (`config CUSTOM_LED` in the module's "
+                      "`Kconfig`): the course's tests enable `CONFIG_CUSTOM_LED=y`.")
     header = SPEC_HEADER in repo.srcs
     report.check(header, "the header is `<custom_led/custom_led.h>`", path=SPEC_HEADER,
                  fix=f"Put the driver's header at `{SPEC_HEADER}` (included as `<custom_led/custom_led.h>`), "
@@ -1151,11 +1170,10 @@ def check_spec(report, repo, task, drv):
                          f"`uint32_t custom_led_get_period(const struct device *dev)` in `{SPEC_HEADER}`; "
                          f"`{missing[0] if missing else ''}` is missing.")
     if task.startswith("l7"):
-        report.check(kconfig_defines(repo, "CUSTOM_LED_SHELL"), "the module defines `CONFIG_CUSTOM_LED_SHELL`",
-                     path=f"{SPEC_MODULE}/Kconfig",
-                     fix="Add `config CUSTOM_LED_SHELL` (depends on `CUSTOM_LED && SHELL`) to the module's "
-                         "`Kconfig`, and build the shell code with `zephyr_library_sources_ifdef("
-                         "CONFIG_CUSTOM_LED_SHELL ...)`: the course's test enables it.")
+        check_kconfig(report, repo, "CUSTOM_LED_SHELL",
+                      fix="Add `config CUSTOM_LED_SHELL` (depends on `CUSTOM_LED && SHELL`) to the module's "
+                          "`Kconfig`, and build the shell code with `zephyr_library_sources_ifdef("
+                          "CONFIG_CUSTOM_LED_SHELL ...)`: the course's test enables it.")
 
 
 def check_shell_location(report, shell_root):
@@ -1163,7 +1181,7 @@ def check_shell_location(report, shell_root):
         report.check(shell_root.src.rel.startswith(SPEC_MODULE + "/"), "the `sensor` command is in the driver module",
                      path=shell_root.src.rel,
                      fix=f"Move the `sensor` shell command from `{shell_root.src.rel}` into the driver module "
-                         "(e.g. `app/modules/drivers/custom_led/custom_led_shell.c`, built with "
+                         f"(e.g. `{SPEC_MODULE}/drivers/custom_led/custom_led_shell.c`, built with "
                          "`CONFIG_CUSTOM_LED_SHELL`): the course's test builds the module without your `main`.")
 
 
@@ -1292,8 +1310,9 @@ def check_build(report, repo, app, build_dir, info, drv, shell_root, caller=None
                                     "devicetree node (`default y` + `depends on DT_HAS_..._ENABLED`)."
                                     if gate else
                                     f"Add `{rel}` to the build of `{app}`: from `{app}/CMakeLists.txt` "
-                                    "(`target_sources` / `add_subdirectory`), or as a module through "
-                                    "`zephyr/module.yml`."))
+                                    "(`target_sources` / `add_subdirectory`), or as a module: list "
+                                    f"`{SPEC_MODULE}` in `ZEPHYR_EXTRA_MODULES` before `find_package(Zephyr)`, "
+                                    f"with `{SPEC_MODULE_YML}`."))
     if files is not None and shell_root:
         rel = shell_root.src.rel
         report.check(any(f.endswith("/" + rel) for f in files), "the shell commands are compiled into the app",
