@@ -45,8 +45,7 @@ static int custom_led_sample_fetch(const struct device *dev, enum sensor_channel
   // Get runtime data for the device
   struct custom_led_data *data = dev->data;
   const struct custom_led_config *cfg = dev->config;
-  data->led_on = true;
-  return gpio_pin_set_dt(&cfg->led_pin, data->led_on);
+  return gpio_pin_toggle_dt(&cfg->led_pin);
 }
 
 /**
