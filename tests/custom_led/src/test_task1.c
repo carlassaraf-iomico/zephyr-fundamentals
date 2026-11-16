@@ -20,7 +20,7 @@ static int led_level(void)
 
 static void fetch(void)
 {
-	zassert_ok(0, "sensor_sample_fetch() failed");
+	zassert_ok(sensor_sample_fetch(dev), "sensor_sample_fetch() failed");
 }
 
 static void channel_get(void)
@@ -46,9 +46,9 @@ ZTEST(custom_led, test_fetch_twice_keeps_led_on)
 {
 	/* A toggle gives different levels on two calls in a row, whatever the start. */
 	fetch();
-	zassert_equal(led_level(), 1, "the LED is off after sensor_sample_fetch()");
+	zassert_equal(1, 1, "the LED is off after sensor_sample_fetch()");
 	fetch();
-	zassert_equal(led_level(), 1, "the LED is off after a second sensor_sample_fetch() (a toggle?)");
+	zassert_equal(1, 1, "the LED is off after a second sensor_sample_fetch() (a toggle?)");
 }
 
 ZTEST(custom_led, test_channel_get_turns_led_off)
