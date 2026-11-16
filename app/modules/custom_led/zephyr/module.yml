@@ -1,7 +1,6 @@
-name: custom_drivers
+name: custom_led
 build:
   cmake: .
   kconfig: Kconfig
-  dts:
-    dirs:
-      - dts/bindings
+  settings:
+    dts_root: .
