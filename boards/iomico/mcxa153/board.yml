@@ -1,1 +1,6 @@
-# TODO
+board:
+  name: mcxa153
+  full_name: MCXA153
+  vendor: iomico
+  socs:
+  - name: mcxa153
