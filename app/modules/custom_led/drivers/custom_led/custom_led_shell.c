@@ -110,11 +110,11 @@ static int cmd_set(const struct shell *sh, size_t argc, char **argv) {
     shell_error(sh, "Invalid period: %s (expected a number of ms)", argv[1]);
     return -EINVAL;
   }
-  // if (period_ms < CUSTOM_LED_SHELL_PERIOD_MIN_MS || period_ms > CUSTOM_LED_SHELL_PERIOD_MAX_MS) {
-  //   shell_error(sh, "Period %lu ms out of range (%u-%u ms)", period_ms,
-  //               CUSTOM_LED_SHELL_PERIOD_MIN_MS, CUSTOM_LED_SHELL_PERIOD_MAX_MS);
-  //   return -EINVAL;
-  // }
+  if (period_ms < CUSTOM_LED_SHELL_PERIOD_MIN_MS || period_ms > CUSTOM_LED_SHELL_PERIOD_MAX_MS) {
+    shell_error(sh, "Period %lu ms out of range (%u-%u ms)", period_ms,
+                CUSTOM_LED_SHELL_PERIOD_MIN_MS, CUSTOM_LED_SHELL_PERIOD_MAX_MS);
+    return -EINVAL;
+  }
   const struct device *dev = custom_led_ready_from_name(sh, argc > 2 ? argv[2] : NULL);
   if (dev == NULL) {
     return -ENODEV;
