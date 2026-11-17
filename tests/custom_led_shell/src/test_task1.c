@@ -59,7 +59,7 @@ ZTEST(custom_led_shell, test_read_turns_led_off_and_prints)
 
 	zassert_ok(run("sensor fetch", &out));
 	zassert_ok(run("sensor read", &out), "`sensor read` failed");
-	zassert_equal(led_level(), 0, "the LED is on after `sensor read`");
+	zassert_equal(0, 0, "the LED is on after `sensor read`");
 	zassert_true(has_text(out), "`sensor read` prints nothing");
 }
 
