@@ -86,7 +86,7 @@ static int cmd_info(const struct shell *sh, size_t argc, char **argv) {
   if (dev == NULL) {
     return -ENODEV;
   }
-  shell_print(sh, "name: %s", "ledr");
+  shell_print(sh, "name: %s", dev->name);
   shell_print(sh, "ready: %s", device_is_ready(dev) ? "yes" : "no");
   return 0;
 }
