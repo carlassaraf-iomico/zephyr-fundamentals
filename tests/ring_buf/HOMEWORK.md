@@ -84,7 +84,7 @@ west twister -T tests/ring_buf -p qemu_x86 -b
 
 ---
 
-## Task 1 — Implement the Tests  `git tag l8-task1`
+## Task 1 — Implement the Tests  (branch `l8-task1`)
 
 Open `src/test_ring_buf.c` and fill in each stub `ZTEST` body according to
 `TEST_SPEC.md`. Study `test_fresh_state` first — it shows the pattern.
@@ -112,13 +112,14 @@ west twister -T tests/ring_buf -p native_sim
 west twister -T tests/ring_buf -p qemu_x86
 ```
 
-### Tag `l8-task1`
+### Submit `l8-task1`
 
-After every test passes, tag the commit `l8-task1`.
+After every test passes, commit on the `l8-task1` branch, push it and open a pull request
+(see `HOMEWORK.md` at the root of the repository).
 
 ---
 
-## Task 2 — Coverage Analysis  `git tag l8-task2`
+## Task 2 — Coverage Analysis  (branch `l8-task2`)
 
 **Linux / WSL**
 ```bash
@@ -156,7 +157,7 @@ Branches:  64.3%  (9/14)
    Ask yourself: *what test case(s) would be needed to cover those lines?* (no need to 
    implement them, just think about it).
 
-### Tag `l8-task2`
+### Submit `l8-task2`
 
-Include the `twister-out/coverage/` directory in the commit and tag it
-`l8-task2`.
+Include the `twister-out/coverage/` directory in the commit on the `l8-task2` branch, push it
+and open a pull request (see `HOMEWORK.md` at the root of the repository).

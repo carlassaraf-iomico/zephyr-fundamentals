@@ -10,6 +10,6 @@ See HOMEWORK.md for the whole flow.
 - [ ] This pull request is from a branch named after the task (`lX-taskY`), in my fork.
 - [ ] `board.txt` at the root of my repository names the board I use.
 - [ ] I built it for my board, and ran it on the board when I have one.
-- [ ] I didn't change anything in `.github/`.
+- [ ] I didn't change anything in `.github/`, `tests/custom_led/` or `tests/custom_led_shell/`.
 
 <!-- Optional: anything an instructor should know, e.g. "my board has no LED, so the overlay adds one". -->

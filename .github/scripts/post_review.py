@@ -6,15 +6,17 @@ with secrets). It never checks out or runs anything from the PR:
 
 1. Finds the PR through the API from the check run's head repository, branch
    and SHA, and skips a SHA that was already reviewed.
-2. Takes the task from the PR's branch name, and refuses to trust a PR that
-   changes `.github/` (its check run used the PR's own workflow).
+2. Takes the task from the PR's branch name, and rejects a PR that changes the
+   files the checks rely on (PROTECTED: `.github/`, whose workflow the check run
+   used, and the course's tests in `tests/custom_led*/`): changes needed, without
+   reading its results.
 3. Reads result.json from the check run's artifact and checks it is for that task.
    The scripts' verdict is final; there is no AI review.
 4. Posts one review (event COMMENT) with the status, the changes and the
    checklist, inline comments on lines in the diff, and labels. Approved PRs
    are closed. A PR left for an instructor gets a review request for the
-   instructors in MANUAL_REVIEWER (comma-separated); real problems (a `.github/`
-   change, a broken check run) also mention them in the review.
+   instructors in MANUAL_REVIEWER (comma-separated); real problems (a broken
+   check run) also mention them in the review.
 
     python3 post_review.py --artifacts DIR            # in the workflow
     python3 post_review.py --artifacts DIR --pr 12 --dry-run   # print, post nothing
@@ -43,6 +45,9 @@ LABELS = {
     "under_review": ("needs-instructor", "fbca04", "An instructor reviews this by hand"),
 }
 TASK_LABEL_COLOR = "1d76db"
+# Folders the checks rely on: the workflows and scripts, and the course's tests that run the
+# student's driver. A PR that changes them is rejected without looking at its check run.
+PROTECTED = (".github/", "tests/custom_led/", "tests/custom_led_shell/")
 BOT_LOGINS = {"github-actions[bot]"}
 
 
@@ -128,13 +133,29 @@ def diff_lines(pr_files):
 
 # ---------------------------------------------------------------- decision
 
-def decide(task, result, result_problem, touches_github):
+def protected_files(pr_files):
+    """The PR's files under PROTECTED (either side of a rename), in the PR's order."""
+    out = []
+    for f in pr_files:
+        for name in (f.get("previous_filename"), f["filename"]):
+            if name and name.startswith(PROTECTED) and name not in out:
+                out.append(name)
+    return out
+
+
+def protected_review(touched):
+    """(summary, changes) for a PR that changes PROTECTED files."""
+    folders = ", ".join(f"`{p}`" for p in PROTECTED)
+    summary = (f"This pull request changes files the checks rely on ({folders}), so its checks can't be "
+               "trusted and weren't read. Undo those changes, e.g. `git checkout main -- <file>` "
+               "(or `git rm` a file you added), and push again.")
+    changes = [{"message": f"Undo your change to `{name}`: the checks rely on it."} for name in touched]
+    return summary, changes
+
+
+def decide(task, result, result_problem):
     """Returns (status, summary, changes, reason, routine). routine: an expected instructor review
     (a rule the scripts can't settle), not a problem worth a mention."""
-    if touches_github:
-        return ("under_review", "This pull request changes files in `.github/`, so its checks "
-                "can't be trusted. An instructor will review it.", [],
-                "The PR changes `.github/`.", False)
     if result is None:
         return ("under_review", f"{result_problem} An instructor will look at it.", [],
                 result_problem, False)
@@ -316,14 +337,20 @@ def main():
         set_labels(args.repo, pr, None, "changes_needed", args.dry_run)
         return 0
 
-    touches_github = any(f["filename"].startswith(".github/") or
-                         (f.get("previous_filename") or "").startswith(".github/") for f in pr_files)
+    touched = protected_files(pr_files)
+    if touched:  # rejected whatever its check run says: that run may have used the PR's own checks
+        summary, changes = protected_review(touched)
+        body = compose(task, sha, "changes_needed", summary, changes, "", None, None)
+        post(args.repo, pr, sha, body, [], pr_files, args.dry_run)
+        set_labels(args.repo, pr, task, "changes_needed", args.dry_run)
+        return 0
+
     result, problem = load_result(args.artifacts, task)
     if result is None and run.get("conclusion") == "cancelled":
         log("The check run was cancelled; nothing to post.")
         return 0
 
-    status, summary, changes, reason, routine = decide(task, result, problem, touches_github)
+    status, summary, changes, reason, routine = decide(task, result, problem)
     mention = None if routine else instructors
     body = compose(task, sha, status, summary, changes, reason, result, mention)
     post(args.repo, pr, sha, body, changes, pr_files, args.dry_run)

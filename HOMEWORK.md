@@ -82,8 +82,9 @@ checks build for `native_sim` and ask you to add it.
 
 ## Good to know
 
-- Don't change files in `.github/`. A pull request that does gets no automatic review, only an
-  instructor's.
+- Don't change files in `.github/`, `tests/custom_led/` or `tests/custom_led_shell/`: the checks
+  rely on them. A pull request that changes any of them gets ❌ **changes needed** without being
+  checked; undo the change (e.g. `git checkout main -- <file>`) and push again.
 - The checks build your code on GitHub's servers, so a task approved here builds without your
   local setup. Results show in the pull request's "Checks" tab as well, with the build log.
 - Some tasks also run the course's tests from `tests/` with your code. They rely on the names

@@ -1,8 +1,7 @@
 # Automatic checks for homework tasks.
 #
 # Runs on a pull request from a task branch (the submission flow, see HOMEWORK.md),
-# and on a push of a task tag or branch in a student's fork, e.g.
-#   git tag l3-task1 && git push origin l3-task1
+# and on a push of a task branch in a student's fork (when Actions is enabled there).
 # Only the job for that task runs. Results show in the run's summary page and as
 # annotations on the files that need changes. On a pull request, the
 # "Homework review" workflow then posts them on the PR.
@@ -16,7 +15,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   push:
-    tags: ['l*-task*']
     branches: ['l*-task*']
   workflow_dispatch:
     inputs:
@@ -36,7 +34,7 @@ env:
   HOMEWORK_REF: ${{ github.head_ref || inputs.task || github.ref_name }}
 
 jobs:
-  # Works out the task from the branch or tag name: l4-task1, l4-task1-fix, ...
+  # Works out the task from the branch name: l4-task1, l4-task1-fix, ...
   task:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

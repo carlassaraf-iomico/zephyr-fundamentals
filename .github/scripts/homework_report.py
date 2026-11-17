@@ -6,7 +6,7 @@ job summary when running in Actions, and writes a result JSON that matches one
 entry of the course feedback file (feedback/students/<nickname>.json):
 
     {"task": "l3-task1", "status": "approved" | "changes_needed" | "under_review" | "error",
-     "ref": "<tag or branch>", "changes": [{"message", "path", "line"}],
+     "ref": "<branch>", "changes": [{"message", "path", "line"}],
      "title": "...", "checks": [{"ok", "label", "message", "path", "line"}],
      "notes": [...], "error": null | {"message", "path", "line"}}
 
