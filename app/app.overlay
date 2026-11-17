@@ -1,0 +1,22 @@
+/ {
+    custom_led_0: custom-led0 {
+        compatible = "course,custom-led";
+        gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+    };
+
+    custom_led_1: custom-led1 {
+        compatible = "course,custom-led";
+        gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+    };
+
+    custom_led_2: custom-led2 {
+        compatible = "course,custom-led";
+        gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+    };
+
+    aliases {
+        ledr = &custom_led_0;
+        ledg = &custom_led_1;
+        ledb = &custom_led_2;
+    };
+};
