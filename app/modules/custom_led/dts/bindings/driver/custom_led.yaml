@@ -1,0 +1,10 @@
+description: Custom LED sensor
+
+compatible: "course,custom-led"
+
+include: base.yaml
+
+properties:
+  gpios:
+    type: phandle-array
+    required: true
