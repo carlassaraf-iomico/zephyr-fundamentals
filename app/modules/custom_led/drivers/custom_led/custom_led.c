@@ -85,7 +85,7 @@ static int custom_led_set_period_impl(const struct device *dev, uint32_t period_
   if (period_ms == 0) {
     return -EINVAL;
   }
-  // data->period_ms = period_ms;
+  data->period_ms = period_ms;
   return 0;
 }
 
