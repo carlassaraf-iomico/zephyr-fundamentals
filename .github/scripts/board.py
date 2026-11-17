@@ -512,3 +512,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# CI test: a student PR that touches .github/ should go to an instructor.
