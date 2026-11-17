@@ -1,0 +1,9 @@
+source "Kconfig.zephyr"
+
+menu "Application options"
+
+  config BLINKY_SLEEP_MS
+    int "Time in ms between LED toggle"
+    default 500
+
+endmenu

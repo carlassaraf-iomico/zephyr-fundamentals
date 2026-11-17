@@ -1,30 +1,26 @@
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
-
-#define SLEEP_TIME_MS 1000
-
-/* The devicetree node identifier for the "led0" alias. */
-#define LED_NODE DT_ALIAS(led0)
-
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED_NODE, gpios);
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
-int main(void)
-{
-    bool led_state = true;
+int main(void) {
 
-    if (!gpio_is_ready_dt(&led)) return 0;
+    const struct device *ledr = DEVICE_DT_GET(DT_ALIAS(ledr));
+    const struct device *ledg = DEVICE_DT_GET(DT_ALIAS(ledg));
+    const struct device *ledb = DEVICE_DT_GET(DT_ALIAS(ledb));
 
-    if (gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE) < 0) return 0;
+    if (!device_is_ready(ledr) || !device_is_ready(ledg) || !device_is_ready(ledb)) {
+        LOG_ERR("Custom LED device not ready");
+        return 0;
+    }
 
+    struct sensor_value val;
     while (1) {
-        if (gpio_pin_toggle_dt(&led) < 0) return 0;
-
-        led_state = !led_state;
-        LOG_INF("LED state: %s", led_state ? "ON" : "OFF");
-        k_msleep(SLEEP_TIME_MS);
+        sensor_sample_fetch(ledb);
+        k_msleep(CONFIG_BLINKY_SLEEP_MS);
+        sensor_channel_get(ledb, SENSOR_CHAN_ALL, &val);
+        k_msleep(CONFIG_BLINKY_SLEEP_MS);
     }
     return 0;
 }

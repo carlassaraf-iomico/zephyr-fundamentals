@@ -1,0 +1,12 @@
+config CUSTOM_LED
+    bool "Custom LED driver"
+    depends on GPIO && SENSOR
+
+config CUSTOM_LED_SHELL
+    bool "Custom LED shell commands"
+    depends on CUSTOM_LED && SHELL
+    # Zephyr's sensor shell registers its own `sensor` root command
+    depends on !SENSOR_SHELL
+    help
+      Adds the `sensor` shell command with `fetch`, `read` and `info`
+      subcommands for the custom LED devices.
